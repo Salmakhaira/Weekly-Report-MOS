@@ -1,7 +1,3 @@
-/* =====================================================================
-   input.js — form isian, satu salesman per layar.
-   ===================================================================== */
-
 import { sb, requireSession, renderShell, showNote, escapeHtml, defaultPeriod } from './app.js';
 import { COLUMNS, MONTHS, WEEKS, STORED, computeRow, fmt } from './schema.js';
 
