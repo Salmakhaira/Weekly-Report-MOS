@@ -1,8 +1,3 @@
-/* =====================================================================
-   view.js — menyusun ulang tampilan Weekly Report (kolom A sampai BX)
-   dari data mentah per salesman.
-   ===================================================================== */
-
 import { sb, requireSession, renderShell, showNote, escapeHtml, defaultPeriod } from './app.js';
 import { COLUMNS, MONTHS, WEEKS, computeRow, aggregate, buildHeaderMatrix, fmt } from './schema.js';
 
