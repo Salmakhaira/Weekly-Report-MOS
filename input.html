@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Input Data · Weekly Report MOS</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div id="shell"></div>
+
+<main class="wrap-wide">
+  <div class="page-head">
+    <p class="eyebrow">Input Data</p>
+    <h1>Isi laporan cabang</h1>
+    <p>Satu baris per salesman, sama seperti blok cabang di file Excel. Kolom abu-abu dihitung otomatis dan tidak bisa diketik.</p>
+  </div>
+
+  <div class="toolbar">
+    <div class="field">
+      <label for="f-year">Tahun</label>
+      <select id="f-year"></select>
+    </div>
+    <div class="field">
+      <label for="f-month">Bulan</label>
+      <select id="f-month"></select>
+    </div>
+    <div class="field">
+      <label>Minggu berjalan</label>
+      <div class="weekpick" id="f-week" role="group" aria-label="Pilih minggu"></div>
+    </div>
+    <div class="field grow">
+      <label for="f-branch">Cabang</label>
+      <select id="f-branch"></select>
+    </div>
+    <div class="field">
+      <label for="f-allweeks" style="display:flex;gap:7px;align-items:center;cursor:pointer">
+        <input type="checkbox" id="f-allweeks" style="width:auto;margin:0">
+        Tampilkan semua minggu
+      </label>
+    </div>
+  </div>
+
+  <div id="note" class="note"></div>
+
+  <div class="tablewrap" id="gridwrap">
+    <div class="skeleton">Memuat data…</div>
+  </div>
+
+  <p class="hint" style="margin:10px 0 14px">
+    Tip: Anda bisa menyalin satu blok sel dari Excel lalu menempelkannya (Ctrl+V) di sel mana pun pada tabel ini.
+  </p>
+
+  <div class="formbar">
+    <button id="btn-save">Simpan perubahan</button>
+    <button class="ghost" id="btn-reload">Muat ulang</button>
+    <span class="hint" id="status"></span>
+  </div>
+</main>
+
+<script type="module" src="assets/input.js"></script>
+</body>
+</html>
