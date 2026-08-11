@@ -334,6 +334,7 @@ button.link:hover { background: rgba(255,255,255,.08); color: #fff; }
 }
 .calcbox span { color: var(--muted); }
 .calcbox b { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+.calcbox b.neg { color: var(--danger); }
 
 .formbar {
   position: sticky;
@@ -348,7 +349,81 @@ button.link:hover { background: rgba(255,255,255,.08); color: #fff; }
   box-shadow: 0 -6px 18px -12px rgba(18,33,31,.4);
 }
 
-/* ---------- Tabel data ---------------------------------------------- */
+.salespick { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 20px; }
+.salespick button {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface); color: var(--graphite);
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 7px 14px 7px 11px;
+  font-family: var(--font-ui); font-size: 13px; font-weight: 500;
+}
+.salespick button .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); flex: none; }
+.salespick button.saved   .dot { background: var(--ok); }
+.salespick button.pending .dot { background: var(--ochre); }
+.salespick button[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-sft); color: var(--accent-dk); }
+.salespick button:hover:not([aria-pressed='true']) { border-color: var(--accent); }
+
+.form-title { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.form-title h2 { font-size: 17px; }
+.form-title .hint { margin: 0; }
+
+.periodband {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--ink); color: #fff;
+  border-radius: var(--r);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-size: 14.5px;
+}
+.periodband b { font-weight: 700; }
+.periodband .sep { color: #6f8a83; }
+.periodband .progress {
+  margin-left: auto;
+  font-family: var(--font-num);
+  font-size: 12px;
+  color: #a9c2bc;
+  background: rgba(255,255,255,.08);
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+
+.fieldhint { margin: 5px 2px 0; font-size: 11.5px; color: var(--muted); }
+.fieldhint .warn { color: var(--ochre); font-weight: 600; }
+
+.acctable { border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--surface); }
+.acc-head {
+  display: grid; grid-template-columns: 1.6fr .85fr .85fr .95fr 90px;
+  gap: 10px; padding: 10px 16px;
+  background: #e9eeec; border-bottom: 1px solid var(--line);
+  font-family: var(--font-num); font-size: 10.5px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted);
+}
+.acc-head span:not(:first-child) { text-align: right; }
+.acc-row + .acc-row { border-top: 1px solid var(--line-soft); }
+.acc-summary {
+  width: 100%; display: grid; grid-template-columns: 1.6fr .85fr .85fr .95fr 90px;
+  gap: 10px; align-items: center;
+  padding: 13px 16px; background: var(--surface); border: none; border-radius: 0;
+  font-family: var(--font-ui); font-weight: 500; font-size: 13.5px; color: var(--ink);
+  cursor: pointer; text-align: left;
+}
+.acc-summary:hover { background: var(--line-soft); }
+.acc-row[data-open="true"] .acc-summary { background: var(--accent-sft); }
+.acc-summary .num { font-family: var(--font-num); text-align: right; font-variant-numeric: tabular-nums; color: var(--graphite); }
+.acc-summary .stat { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-size: 12px; }
+.acc-summary .stat .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; }
+.acc-summary .stat.saved .dot { background: var(--ok); }
+.acc-summary .stat.pending .dot { background: var(--ochre); }
+.acc-summary .chev { transition: transform .15s; color: var(--muted); }
+.acc-row[data-open="true"] .chev { transform: rotate(90deg); }
+.acc-summary .warnflag { color: var(--ochre); font-size: 13px; }
+.acc-body { padding: 18px 16px 20px; border-top: 1px solid var(--line); background: #fbfcfb; }
+
+@media (max-width: 720px) {
+  .acc-head, .acc-summary { grid-template-columns: 1.4fr 1fr 24px; }
+  .acc-head span:nth-child(2), .acc-head span:nth-child(3),
+  .acc-summary .num { display: none; }
+}
 .tablewrap {
   overflow: auto;
   max-height: calc(100dvh - 210px);
