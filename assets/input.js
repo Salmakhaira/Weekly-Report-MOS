@@ -180,23 +180,6 @@ function renderForm() {
       <p class="hint">${MONTHS[state.month - 1]} ${state.year} · Minggu ${w}</p>
     </div>
 
-    <div class="row" style="margin-bottom:16px">
-      ${fieldHtml('market_size_year',  row, 'Market Size / Tahun')}
-      ${fieldHtml('market_size_month', row, 'Market Size / Bulan')}
-      ${fieldHtml('plan_sales_master', row, 'Plan Sales Master')}
-    </div>
-
-    <details class="group" open>
-      <summary>Live Quotation by CRM</summary>
-      <div class="body">
-        <div class="row">
-          ${fieldHtml(`lq_tm_w${w}`, row, `TM Minggu Berjalan (W${w})`)}
-          ${fieldHtml('lq_lm', row, 'LM (Bulan Lalu)')}
-        </div>
-        <div style="margin-top:12px">${calcHtml('lq_total', calc, 'Total (TM + LM)')}</div>
-      </div>
-    </details>
-
     <details class="group" open>
       <summary>Outlook PRTM</summary>
       <div class="body">
