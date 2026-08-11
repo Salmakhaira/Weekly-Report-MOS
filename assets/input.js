@@ -213,16 +213,6 @@ function renderForm() {
       </div>
     </details>
 
-    <details class="group">
-      <summary>Jadwal &amp; Catatan</summary>
-      <div class="body">
-        ${fieldHtml('ms_teams_schedule', row, 'MS Teams Schedule')}
-        <div style="margin-top:14px">
-          ${fieldHtml('kemampuan_po', row, 'Kemampuan Memenuhi PO dari Quotation (80%, 50–80%)')}
-        </div>
-      </div>
-    </details>
-
     <div class="formbar">
       <button type="submit">Simpan salesman ini</button>
       <button type="button" class="ghost" id="btn-save-all">Simpan semua perubahan (<span id="dirty-count">${state.dirty.size}</span>)</button>
