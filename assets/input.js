@@ -1,11 +1,18 @@
 /* =====================================================================
-   input.js — form isian untuk ketua cabang, satu salesman per layar.
+   input.js — tabel ringkas yang bisa dibuka per baris (accordion).
 
-   Tiga hal yang dirancang khusus supaya tidak keliru saat mengisi:
+   Baris = salesman, ringkas + status. Diklik, baris itu terbuka
+   menampilkan form lengkap; baris lain otomatis tertutup supaya
+   ketua cabang selalu fokus mengisi satu orang saja.
+
+   Pengaman kekeliruan yang tersemat:
    1. Papan periode besar di atas, supaya tidak salah cabang/minggu.
-   2. Setiap kolom mingguan menampilkan angka minggu lalu sebagai pembanding,
-      dengan tanda kalau lompatannya mencurigakan (naik/turun >2x).
-   3. Alur "Simpan & Lanjut" yang otomatis maju ke salesman berikutnya.
+   2. Ringkasan baris (kolom TM/Act PRTM/Total OL PRTM) kelihatan tanpa
+      buka form — jadi ketua cabang bisa cek wajar-tidaknya sekilas.
+   3. Tanda "!" oranye di baris kalau ada angka yang melompat jauh dari
+      minggu lalu, kelihatan bahkan sebelum baris dibuka.
+   4. Setelah simpan, baris otomatis tertutup dan pindah ke baris
+      berikutnya — alur checklist dari atas ke bawah.
    ===================================================================== */
 
 import { sb, requireSession, renderShell, showNote, escapeHtml, defaultPeriod } from './app.js';
@@ -19,11 +26,11 @@ const COL = new Map(COLUMNS.map(c => [c.key, c]));
 
 /* Kolom mingguan yang punya pasangan "minggu lalu" untuk dibandingkan. */
 const WEEK_FIELDS = {
-  [`lq_tm`]:    w => `lq_tm_w${w}`,
-  [`act_prtm`]: w => `act_prtm_w${w}`,
-  [`qc_gt80`]:  w => `qc_w${w}_gt80`,
-  [`qc_50_80`]: w => `qc_w${w}_50_80`,
-  [`qc_lt50`]:  w => `qc_w${w}_lt50`,
+  lq_tm:    w => `lq_tm_w${w}`,
+  act_prtm: w => `act_prtm_w${w}`,
+  qc_gt80:  w => `qc_w${w}_gt80`,
+  qc_50_80: w => `qc_w${w}_50_80`,
+  qc_lt50:  w => `qc_w${w}_lt50`,
 };
 
 const el = {
@@ -32,8 +39,7 @@ const el = {
   week: document.getElementById('f-week'),
   branch: document.getElementById('f-branch'),
   band: document.getElementById('periodband'),
-  pick: document.getElementById('salespick'),
-  form: document.getElementById('entry-form'),
+  table: document.getElementById('acctable'),
 };
 
 const state = {
@@ -42,9 +48,9 @@ const state = {
   branchName: '',
   salesmen: [],
   rows: new Map(),      // salesman_id -> baris bulan berjalan
-  prevRows: new Map(),  // salesman_id -> baris bulan sebelumnya (untuk pembanding W1)
+  prevRows: new Map(),  // salesman_id -> baris bulan sebelumnya (pembanding W1)
   dirty: new Set(),
-  currentId: null,
+  openId: null,          // salesman_id yang barisnya sedang terbuka
 };
 
 /* ---------- Pemilih periode ------------------------------------------ */
@@ -67,8 +73,8 @@ if (brErr) showNote('note', 'Gagal memuat daftar cabang: ' + brErr.message, 'err
 const allowed = isAdmin ? (branches ?? []) : (branches ?? []).filter(b => b.id === profile.branch_id);
 
 if (!allowed.length) {
-  el.form.innerHTML = '<div class="skeleton">Akun Anda belum dihubungkan ke cabang mana pun. ' +
-                       'Hubungi admin head office.</div>';
+  el.table.innerHTML = '<div class="skeleton">Akun Anda belum dihubungkan ke cabang mana pun. ' +
+                        'Hubungi admin head office.</div>';
 } else {
   el.branch.innerHTML = allowed.map(b =>
     `<option value="${b.id}">${escapeHtml(b.code)} — ${escapeHtml(b.name)}</option>`).join('');
@@ -92,7 +98,7 @@ el.week.addEventListener('click', (e) => {
   state.week = +b.dataset.week;
   [...el.week.children].forEach(x => x.setAttribute('aria-pressed', x === b));
   renderBand();
-  renderForm();
+  renderTable();
 });
 
 window.addEventListener('beforeunload', (e) => {
@@ -107,9 +113,8 @@ function prevPeriod(year, month) {
 async function load() {
   if (state.dirty.size && !confirm('Ada perubahan yang belum disimpan. Tinggalkan halaman ini?')) return;
   state.dirty.clear();
-  el.pick.innerHTML = '';
   el.band.innerHTML = '';
-  el.form.innerHTML = '<div class="skeleton">Memuat data…</div>';
+  el.table.innerHTML = '<div class="skeleton">Memuat data…</div>';
   showNote('note', '');
 
   const prev = prevPeriod(state.year, state.month);
@@ -138,14 +143,13 @@ async function load() {
   }
 
   if (!state.salesmen.length) {
-    el.form.innerHTML = '<div class="skeleton">Cabang ini belum punya salesman terdaftar.</div>';
+    el.table.innerHTML = '<div class="skeleton">Cabang ini belum punya salesman terdaftar.</div>';
     return;
   }
 
-  state.currentId = state.salesmen[0].id;
+  state.openId = null;
   renderBand();
-  renderPicker();
-  renderForm();
+  renderTable();
 }
 
 function blankRow(salesmanId) {
@@ -161,44 +165,26 @@ function hasAnyData(row) {
 
 /* ---------- Papan konfirmasi periode ----------------------------------- */
 function renderBand() {
-  const idx = state.salesmen.findIndex(s => s.id === state.currentId);
+  const filled = state.salesmen.filter(s => {
+    const r = state.rows.get(s.id);
+    return r.id || hasAnyData(r);
+  }).length;
   el.band.innerHTML = `
     <span>Mengisi cabang</span> <b>${escapeHtml(state.branchName)}</b>
     <span class="sep">·</span>
     <span>Periode</span> <b>${MONTHS[state.month - 1]} ${state.year}</b>
     <span class="sep">·</span>
     <span>Minggu</span> <b>${state.week}</b>
-    ${state.salesmen.length ? `<span class="progress">${Math.max(idx, 0) + 1} dari ${state.salesmen.length} salesman</span>` : ''}
+    <span class="progress">${filled} dari ${state.salesmen.length} sudah diisi</span>
   `;
 }
 
-/* ---------- Pemilih salesman ------------------------------------------ */
-function renderPicker() {
-  el.pick.innerHTML = state.salesmen.map(s => {
-    const row = state.rows.get(s.id);
-    const cls = state.dirty.has(s.id) ? 'pending' : (row.id || hasAnyData(row)) ? 'saved' : '';
-    return `<button type="button" data-sid="${s.id}" class="${cls}" aria-pressed="${s.id === state.currentId}">
-              <span class="dot"></span>${escapeHtml(s.name)}
-            </button>`;
-  }).join('');
-
-  el.pick.querySelectorAll('button').forEach(btn => {
-    btn.addEventListener('click', () => {
-      state.currentId = btn.dataset.sid;
-      showNote('note', '');
-      renderBand();
-      renderPicker();
-      renderForm();
-    });
-  });
-}
-
 /* ---------- Pembanding minggu lalu -------------------------------------- */
-function prevValue(fieldBase, row) {
+function prevValue(fieldBase, row, sid) {
   const tpl = WEEK_FIELDS[fieldBase];
   if (!tpl) return null;
   if (state.week > 1) return row[tpl(state.week - 1)] ?? null;
-  const prevRow = state.prevRows.get(state.currentId);
+  const prevRow = state.prevRows.get(sid);
   return prevRow ? (prevRow[tpl(4)] ?? null) : null;
 }
 
@@ -208,9 +194,9 @@ function isAnomaly(curr, prev) {
   return ratio >= 2 || ratio <= 0.5;
 }
 
-function hintHtml(fieldBase, key, row) {
+function hintHtml(fieldBase, key, row, sid) {
   if (!WEEK_FIELDS[fieldBase]) return '';
-  const prev = prevValue(fieldBase, row);
+  const prev = prevValue(fieldBase, row, sid);
   if (prev === null) return `<p class="fieldhint">Belum ada data minggu lalu untuk dibandingkan.</p>`;
   const label = state.week > 1 ? `Minggu ${state.week - 1}` : 'Minggu lalu (bulan sebelumnya)';
   const c = COL.get(key);
@@ -219,8 +205,16 @@ function hintHtml(fieldBase, key, row) {
   return `<p class="fieldhint">${label}: <b>${fmt(prev, c)}</b> ${warn}</p>`;
 }
 
+/** Salesman ini punya angka mingguan yang mencurigakan? (untuk tanda di ringkasan) */
+function rowHasAnomaly(row, sid) {
+  return Object.entries(WEEK_FIELDS).some(([base, tpl]) => {
+    const key = tpl(state.week);
+    return isAnomaly(row[key], prevValue(base, row, sid));
+  });
+}
+
 /* ---------- Field helpers ---------------------------------------------- */
-function fieldHtml(key, row, label, weekFieldBase) {
+function fieldHtml(key, row, label, weekFieldBase, sid) {
   const c = COL.get(key);
   const value = row[key] ?? (c.type === 'text' ? '' : 0);
   const text = c.type === 'text';
@@ -230,7 +224,7 @@ function fieldHtml(key, row, label, weekFieldBase) {
       ${text
         ? `<textarea id="f-${key}" rows="2" data-key="${key}">${escapeHtml(value)}</textarea>`
         : `<input type="number" step="any" inputmode="decimal" id="f-${key}" data-key="${key}" value="${value}">`}
-      ${weekFieldBase ? `<div data-hint="${key}">${hintHtml(weekFieldBase, key, row)}</div>` : ''}
+      ${weekFieldBase ? `<div data-hint="${key}">${hintHtml(weekFieldBase, key, row, sid)}</div>` : ''}
     </div>`;
 }
 
@@ -245,95 +239,134 @@ function calcHtml(key, calc, label) {
 
 function lastPath(c) { return c.path[c.path.length - 1]; }
 
-/* ---------- Form utama --------------------------------------------------- */
-function renderForm() {
-  if (!state.currentId) return;
+/* ---------- Tabel accordion --------------------------------------------- */
+function renderTable() {
   const w = state.week;
-  const s = state.salesmen.find(x => x.id === state.currentId);
-  const row = state.rows.get(state.currentId);
-  const calc = computeRow(row, w);
-  const idx = state.salesmen.findIndex(x => x.id === state.currentId);
-  const isLast = idx === state.salesmen.length - 1;
 
-  el.form.innerHTML = `
-    <div class="form-title">
-      <h2>${escapeHtml(s.name)}</h2>
-      <p class="hint">${MONTHS[state.month - 1]} ${state.year} · Minggu ${w}</p>
+  const rowsHtml = state.salesmen.map(s => {
+    const row = state.rows.get(s.id);
+    const calc = computeRow(row, w);
+    const isOpen = s.id === state.openId;
+    const statusCls = state.dirty.has(s.id) ? 'pending' : (row.id || hasAnyData(row)) ? 'saved' : '';
+    const statusTxt = state.dirty.has(s.id) ? 'Belum disimpan' : row.id ? 'Tersimpan' : 'Kosong';
+    const anomaly = rowHasAnomaly(row, s.id);
+
+    return `
+      <div class="acc-row" data-sid="${s.id}" data-open="${isOpen}">
+        <button type="button" class="acc-summary">
+          <span>${escapeHtml(s.name)}</span>
+          <span class="num">${fmt(row[`lq_tm_w${w}`], COL.get('lq_tm_w1'))}</span>
+          <span class="num">${fmt(row[`act_prtm_w${w}`], COL.get('act_prtm_w1'))}</span>
+          <span class="stat ${statusCls}">${anomaly ? '<span class="warnflag" title="Ada angka beda jauh dari minggu lalu">!</span>' : ''}<span class="dot"></span><span class="stat-label">${statusTxt}</span></span>
+          <span class="chev">›</span>
+        </button>
+        ${isOpen ? `<div class="acc-body">${formBody(s, row, calc)}</div>` : ''}
+      </div>`;
+  }).join('');
+
+  el.table.innerHTML = `
+    <div class="acc-head">
+      <span>Salesman</span><span>TM W${w}</span><span>Act PRTM W${w}</span><span>Status</span><span></span>
     </div>
-
-    <div class="row" style="margin-bottom:16px">
-      ${fieldHtml('market_size_year',  row, 'Market Size / Tahun')}
-      ${fieldHtml('market_size_month', row, 'Market Size / Bulan')}
-      ${fieldHtml('plan_sales_master', row, 'Plan Sales Master')}
-    </div>
-
-    <details class="group" open>
-      <summary>Live Quotation by CRM</summary>
-      <div class="body">
-        <div class="row">
-          ${fieldHtml(`lq_tm_w${w}`, row, `TM Minggu Berjalan (W${w})`, 'lq_tm')}
-          ${fieldHtml('lq_lm', row, 'LM (Bulan Lalu)')}
-        </div>
-        <div style="margin-top:12px">${calcHtml('lq_total', calc, 'Total (TM + LM)')}</div>
-      </div>
-    </details>
-
-    <details class="group" open>
-      <summary>Outlook PRTM</summary>
-      <div class="body">
-        ${fieldHtml(`act_prtm_w${w}`, row, `Act PRTM by SO SAP (W${w})`, 'act_prtm')}
-
-        <p class="subhead">Quot Confidence (W${w})</p>
-        <div class="row">
-          ${fieldHtml(`qc_w${w}_gt80`,  row, '> 80%',       'qc_gt80')}
-          ${fieldHtml(`qc_w${w}_50_80`, row, '> 50% – 80%', 'qc_50_80')}
-          ${fieldHtml(`qc_w${w}_lt50`,  row, '< 50%',       'qc_lt50')}
-        </div>
-
-        <p class="subhead">Total PRTM</p>
-        <div class="row">
-          ${fieldHtml('po_non_sap', row, 'PO Non SAP')}
-        </div>
-        <div style="margin:12px 0">${calcHtml('total_ol_prtm', calc, 'Total OL PRTM')}</div>
-
-        <div class="row">
-          ${fieldHtml('ol_min_prtm', row, 'OL Min PRTM')}
-        </div>
-        <div style="margin:12px 0">${calcHtml('balance_prtm', calc, 'Balance PRTM (OL − Plan PRTM)')}</div>
-
-        <div class="row">
-          ${fieldHtml('po_last_month', row, 'PO Bulan Lalu (by SAP)')}
-        </div>
-        <div class="row" style="margin-top:12px">
-          ${calcHtml('total_po', calc, 'Total PO (POCO+PRTM)')}
-          ${calcHtml('total_po_outlook', calc, 'Total PO Outlook')}
-        </div>
-      </div>
-    </details>
-
-    <details class="group">
-      <summary>Jadwal &amp; Catatan</summary>
-      <div class="body">
-        ${fieldHtml('ms_teams_schedule', row, 'MS Teams Schedule')}
-        <div style="margin-top:14px">
-          ${fieldHtml('kemampuan_po', row, 'Kemampuan Memenuhi PO dari Quotation (80%, 50–80%)')}
-        </div>
-      </div>
-    </details>
-
-    <div class="formbar">
-      <button type="submit">${isLast ? 'Simpan (salesman terakhir)' : 'Simpan & Lanjut →'}</button>
-      <button type="button" class="ghost" id="btn-save-all">Simpan semua perubahan (<span id="dirty-count">${state.dirty.size}</span>)</button>
-      <span class="hint" id="status">${statusText(row)}</span>
-    </div>
+    ${rowsHtml}
   `;
 
-  el.form.querySelectorAll('input, textarea').forEach(inp => {
-    inp.addEventListener('input', () => onEdit(inp, row));
+  el.table.querySelectorAll('.acc-summary').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sid = btn.closest('.acc-row').dataset.sid;
+      state.openId = state.openId === sid ? null : sid;
+      showNote('note', '');
+      renderTable();
+      if (state.openId) {
+        document.querySelector(`.acc-row[data-sid="${state.openId}"]`)
+          ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    });
   });
-  el.form.addEventListener('submit', (e) => onSaveAndNext(e, isLast));
-  document.getElementById('btn-save-all').addEventListener('click', saveAll);
-  refreshSaveAllLabel();
+
+  const openForm = el.table.querySelector('.acc-body form');
+  if (openForm) {
+    const sid = state.openId;
+    const row = state.rows.get(sid);
+    openForm.querySelectorAll('input, textarea').forEach(inp => {
+      inp.addEventListener('input', () => onEdit(inp, row, sid));
+    });
+    openForm.addEventListener('submit', (e) => onSaveAndNext(e, sid));
+  }
+}
+
+function formBody(s, row, calc) {
+  const w = state.week;
+  const idx = state.salesmen.findIndex(x => x.id === s.id);
+  const isLast = idx === state.salesmen.length - 1;
+
+  return `
+    <form>
+      <div class="row" style="margin-bottom:16px">
+        ${fieldHtml('market_size_year',  row, 'Market Size / Tahun')}
+        ${fieldHtml('market_size_month', row, 'Market Size / Bulan')}
+        ${fieldHtml('plan_sales_master', row, 'Plan Sales Master')}
+      </div>
+
+      <details class="group" open>
+        <summary>Live Quotation by CRM</summary>
+        <div class="body">
+          <div class="row">
+            ${fieldHtml(`lq_tm_w${w}`, row, `TM Minggu Berjalan (W${w})`, 'lq_tm', s.id)}
+            ${fieldHtml('lq_lm', row, 'LM (Bulan Lalu)')}
+          </div>
+          <div style="margin-top:12px">${calcHtml('lq_total', calc, 'Total (TM + LM)')}</div>
+        </div>
+      </details>
+
+      <details class="group" open>
+        <summary>Outlook PRTM</summary>
+        <div class="body">
+          ${fieldHtml(`act_prtm_w${w}`, row, `Act PRTM by SO SAP (W${w})`, 'act_prtm', s.id)}
+
+          <p class="subhead">Quot Confidence (W${w})</p>
+          <div class="row">
+            ${fieldHtml(`qc_w${w}_gt80`,  row, '> 80%',       'qc_gt80', s.id)}
+            ${fieldHtml(`qc_w${w}_50_80`, row, '> 50% – 80%', 'qc_50_80', s.id)}
+            ${fieldHtml(`qc_w${w}_lt50`,  row, '< 50%',       'qc_lt50', s.id)}
+          </div>
+
+          <p class="subhead">Total PRTM</p>
+          <div class="row">
+            ${fieldHtml('po_non_sap', row, 'PO Non SAP')}
+          </div>
+          <div style="margin:12px 0">${calcHtml('total_ol_prtm', calc, 'Total OL PRTM')}</div>
+
+          <div class="row">
+            ${fieldHtml('ol_min_prtm', row, 'OL Min PRTM')}
+          </div>
+          <div style="margin:12px 0">${calcHtml('balance_prtm', calc, 'Balance PRTM (OL − Plan PRTM)')}</div>
+
+          <div class="row">
+            ${fieldHtml('po_last_month', row, 'PO Bulan Lalu (by SAP)')}
+          </div>
+          <div class="row" style="margin-top:12px">
+            ${calcHtml('total_po', calc, 'Total PO (POCO+PRTM)')}
+            ${calcHtml('total_po_outlook', calc, 'Total PO Outlook')}
+          </div>
+        </div>
+      </details>
+
+      <details class="group">
+        <summary>Jadwal &amp; Catatan</summary>
+        <div class="body">
+          ${fieldHtml('ms_teams_schedule', row, 'MS Teams Schedule')}
+          <div style="margin-top:14px">
+            ${fieldHtml('kemampuan_po', row, 'Kemampuan Memenuhi PO dari Quotation (80%, 50–80%)')}
+          </div>
+        </div>
+      </details>
+
+      <div class="formbar">
+        <button type="submit">${isLast ? 'Simpan (salesman terakhir)' : 'Simpan & Lanjut →'}</button>
+        <span class="hint">${statusText(row)}</span>
+      </div>
+    </form>`;
 }
 
 function statusText(row) {
@@ -342,37 +375,35 @@ function statusText(row) {
     : 'Belum pernah disimpan.';
 }
 
-function onEdit(inp, row) {
+function onEdit(inp, row, sid) {
   const key = inp.dataset.key;
   const c = COL.get(key);
   row[key] = c.type === 'text' ? inp.value : (parseFloat(inp.value) || 0);
-  state.dirty.add(state.currentId);
+  state.dirty.add(sid);
 
+  const body = inp.closest('.acc-body');
   const calc = computeRow(row, state.week);
-  el.form.querySelectorAll('[data-calc]').forEach(box => {
+  body.querySelectorAll('[data-calc]').forEach(box => {
     const k = box.dataset.calc;
     const b = box.querySelector('b');
     b.textContent = fmt(calc[k], COL.get(k));
     b.classList.toggle('neg', calc[k] < 0);
   });
 
-  // perbarui hint pembanding kalau field ini punya pasangan minggu lalu
   for (const [base, tpl] of Object.entries(WEEK_FIELDS)) {
     if (tpl(state.week) === key) {
-      const holder = el.form.querySelector(`[data-hint="${key}"]`);
-      if (holder) holder.innerHTML = hintHtml(base, key, row);
+      const holder = body.querySelector(`[data-hint="${key}"]`);
+      if (holder) holder.innerHTML = hintHtml(base, key, row, sid);
     }
   }
 
-  const btn = el.pick.querySelector(`button[data-sid="${state.currentId}"]`);
-  btn?.classList.add('pending');
-  btn?.classList.remove('saved');
-  refreshSaveAllLabel();
-}
-
-function refreshSaveAllLabel() {
-  const n = document.getElementById('dirty-count');
-  if (n) n.textContent = state.dirty.size;
+  const summary = document.querySelector(`.acc-row[data-sid="${sid}"] .stat`);
+  if (summary) {
+    summary.classList.add('pending');
+    summary.classList.remove('saved');
+    const label = summary.querySelector('.stat-label');
+    if (label) label.textContent = 'Belum disimpan';
+  }
 }
 
 /* ---------- Menyimpan ---------------------------------------------------- */
@@ -408,37 +439,28 @@ async function persist(sids) {
   return true;
 }
 
-/** Simpan salesman yang sedang dibuka, lalu otomatis pindah ke berikutnya. */
-async function onSaveAndNext(e, isLast) {
+/** Simpan salesman yang sedang terbuka, tutup barisnya, lalu buka baris berikutnya. */
+async function onSaveAndNext(e, sid) {
   e.preventDefault();
   showNote('note', '');
 
-  if (state.dirty.has(state.currentId)) {
-    const ok = await persist([state.currentId]);
+  if (state.dirty.has(sid)) {
+    const ok = await persist([sid]);
     if (!ok) return;
   }
 
-  const idx = state.salesmen.findIndex(x => x.id === state.currentId);
-  if (isLast) {
-    showNote('note', 'Tersimpan. Semua salesman di cabang ini sudah dilalui — silakan cek di View Data.', 'ok');
-    renderPicker();
-    renderForm();
-    return;
-  }
+  const idx = state.salesmen.findIndex(x => x.id === sid);
+  const isLast = idx === state.salesmen.length - 1;
 
-  state.currentId = state.salesmen[idx + 1].id;
+  showNote('note', isLast
+    ? 'Tersimpan. Semua salesman di cabang ini sudah dilalui — silakan cek di View Data.'
+    : 'Tersimpan.', 'ok');
+
+  state.openId = isLast ? null : state.salesmen[idx + 1].id;
   renderBand();
-  renderPicker();
-  renderForm();
-}
-
-async function saveAll() {
-  if (!state.dirty.size) { showNote('note', 'Tidak ada perubahan untuk disimpan.', 'info'); return; }
-  showNote('note', '');
-  const ok = await persist([...state.dirty]);
-  if (ok) {
-    showNote('note', 'Semua perubahan tersimpan.', 'ok');
-    renderPicker();
-    renderForm();
+  renderTable();
+  if (state.openId) {
+    document.querySelector(`.acc-row[data-sid="${state.openId}"]`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 }
