@@ -34,30 +34,16 @@ const WEEK_FIELDS = {
 };
 
 const el = {
-  ddYear: document.getElementById('dd-year'),
-  panelYear: document.getElementById('panel-year'),
-  lblYear: document.getElementById('lbl-year'),
-  ddMonth: document.getElementById('dd-month'),
-  panelMonth: document.getElementById('panel-month'),
-  lblMonth: document.getElementById('lbl-month'),
+  year: document.getElementById('f-year'),
+  month: document.getElementById('f-month'),
   week: document.getElementById('f-week'),
   branch: document.getElementById('f-branch'),
-  chips: document.getElementById('periodchips'),
   band: document.getElementById('periodband'),
   table: document.getElementById('acctable'),
 };
 
-const thisYear = new Date().getFullYear();
-const ALL_YEARS = [];
-for (let y = thisYear - 2; y <= thisYear + 1; y++) ALL_YEARS.push(y);
-const ALL_MONTHS = MONTHS.map((_, i) => i + 1);
-
-const DEFAULT = defaultPeriod();
 const state = {
-  years: new Set([DEFAULT.year]),
-  months: new Set([DEFAULT.month]),
-  active: { year: DEFAULT.year, month: DEFAULT.month },
-  week: DEFAULT.week,
+  ...defaultPeriod(),
   branchId: null,
   branchName: '',
   salesmen: [],
@@ -67,116 +53,13 @@ const state = {
   openId: null,          // salesman_id yang barisnya sedang terbuka
 };
 
-/* ---------- Filter Tahun & Bulan (multi-pilih) ------------------------- */
-function updateYearLabel() {
-  const n = state.years.size;
-  el.lblYear.textContent = n === ALL_YEARS.length ? 'Semua tahun'
-    : n === 1 ? [...state.years][0] : `${n} tahun`;
+/* ---------- Pemilih periode ------------------------------------------ */
+const thisYear = new Date().getFullYear();
+for (let y = thisYear - 2; y <= thisYear + 1; y++) {
+  el.year.insertAdjacentHTML('beforeend', `<option value="${y}"${y === state.year ? ' selected' : ''}>${y}</option>`);
 }
-function updateMonthLabel() {
-  const n = state.months.size;
-  el.lblMonth.textContent = n === ALL_MONTHS.length ? 'Semua bulan'
-    : n === 1 ? MONTHS[[...state.months][0] - 1] : `${n} bulan`;
-}
-
-function renderYearPanel() {
-  el.panelYear.innerHTML = `
-    <label class="fd-all"><input type="checkbox" id="cb-year-all"> Semua tahun</label>
-    ${ALL_YEARS.map(y => `<label><input type="checkbox" value="${y}" ${state.years.has(y) ? 'checked' : ''}> ${y}</label>`).join('')}
-  `;
-  el.panelYear.querySelector('#cb-year-all').checked = state.years.size === ALL_YEARS.length;
-  el.panelYear.querySelectorAll('input[type=checkbox]:not(#cb-year-all)').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const y = +cb.value;
-      if (cb.checked) state.years.add(y);
-      else if (state.years.size > 1) state.years.delete(y);
-      else cb.checked = true; // minimal satu tahun harus tetap terpilih
-      el.panelYear.querySelector('#cb-year-all').checked = state.years.size === ALL_YEARS.length;
-      afterPeriodFilterChange();
-    });
-  });
-  el.panelYear.querySelector('#cb-year-all').addEventListener('change', (e) => {
-    state.years = new Set(e.target.checked ? ALL_YEARS : [DEFAULT.year]);
-    renderYearPanel();
-    afterPeriodFilterChange();
-  });
-  updateYearLabel();
-}
-
-function renderMonthPanel() {
-  el.panelMonth.innerHTML = `
-    <label class="fd-all"><input type="checkbox" id="cb-month-all"> Semua bulan</label>
-    ${ALL_MONTHS.map(m => `<label><input type="checkbox" value="${m}" ${state.months.has(m) ? 'checked' : ''}> ${MONTHS[m - 1]}</label>`).join('')}
-  `;
-  el.panelMonth.querySelector('#cb-month-all').checked = state.months.size === ALL_MONTHS.length;
-  el.panelMonth.querySelectorAll('input[type=checkbox]:not(#cb-month-all)').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const m = +cb.value;
-      if (cb.checked) state.months.add(m);
-      else if (state.months.size > 1) state.months.delete(m);
-      else cb.checked = true; // minimal satu bulan harus tetap terpilih
-      el.panelMonth.querySelector('#cb-month-all').checked = state.months.size === ALL_MONTHS.length;
-      afterPeriodFilterChange();
-    });
-  });
-  el.panelMonth.querySelector('#cb-month-all').addEventListener('change', (e) => {
-    state.months = new Set(e.target.checked ? ALL_MONTHS : [DEFAULT.month]);
-    renderMonthPanel();
-    afterPeriodFilterChange();
-  });
-  updateMonthLabel();
-}
-
-/** Kombinasi tahun × bulan yang terpilih, urut kronologis. */
-function getSelectedPeriods() {
-  const ys = [...state.years].sort((a, b) => a - b);
-  const ms = [...state.months].sort((a, b) => a - b);
-  const out = [];
-  for (const y of ys) for (const m of ms) out.push({ year: y, month: m });
-  return out;
-}
-
-function renderPeriodChips() {
-  const periods = getSelectedPeriods();
-  if (periods.length <= 1) { el.chips.innerHTML = ''; return; }
-  el.chips.innerHTML = periods.map(p => {
-    const isActive = p.year === state.active.year && p.month === state.active.month;
-    return `<button type="button" data-y="${p.year}" data-m="${p.month}" aria-pressed="${isActive}">
-              ${MONTHS[p.month - 1].slice(0, 3)} ${p.year}
-            </button>`;
-  }).join('');
-  el.chips.querySelectorAll('button').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const y = +btn.dataset.y, m = +btn.dataset.m;
-      if (y === state.active.year && m === state.active.month) return;
-      if (state.dirty.size && !confirm('Ada perubahan yang belum disimpan. Pindah periode?')) return;
-      state.active = { year: y, month: m };
-      renderPeriodChips();
-      load();
-    });
-  });
-}
-
-/** Kalau periode aktif hilang dari hasil filter, otomatis pindah ke yang pertama. */
-function afterPeriodFilterChange() {
-  updateYearLabel();
-  updateMonthLabel();
-  const periods = getSelectedPeriods();
-  const stillValid = periods.some(p => p.year === state.active.year && p.month === state.active.month);
-  if (!stillValid) {
-    state.active = periods[0];
-    renderPeriodChips();
-    load();
-  } else {
-    renderPeriodChips();
-  }
-}
-
-renderYearPanel();
-renderMonthPanel();
-renderPeriodChips();
-
-/* ---------- Pemilih minggu -------------------------------------------- */
+MONTHS.forEach((m, i) => el.month.insertAdjacentHTML('beforeend',
+  `<option value="${i + 1}"${i + 1 === state.month ? ' selected' : ''}>${m}</option>`));
 el.week.innerHTML = WEEKS.map(w =>
   `<button type="button" data-week="${w}" aria-pressed="${w === state.week}">W${w}</button>`).join('');
 
@@ -202,6 +85,8 @@ if (!allowed.length) {
 }
 
 /* ---------- Peristiwa toolbar ----------------------------------------- */
+el.year.addEventListener('change', () => { state.year = +el.year.value; load(); });
+el.month.addEventListener('change', () => { state.month = +el.month.value; load(); });
 el.branch.addEventListener('change', () => {
   state.branchId = el.branch.value;
   state.branchName = allowed.find(b => b.id === state.branchId)?.name ?? '';
@@ -232,15 +117,14 @@ async function load() {
   el.table.innerHTML = '<div class="skeleton">Memuat data…</div>';
   showNote('note', '');
 
-  const { year, month } = state.active;
-  const prev = prevPeriod(year, month);
+  const prev = prevPeriod(state.year, state.month);
 
   const [{ data: salesmen, error: e1 }, { data: entries, error: e2 }, { data: prevEntries }] = await Promise.all([
     sb.from('salesmen').select('id, name, sort_order')
       .eq('branch_id', state.branchId).eq('is_active', true).order('sort_order'),
     sb.from('mos_entries').select('*')
       .eq('branch_id', state.branchId)
-      .eq('period_year', year).eq('period_month', month),
+      .eq('period_year', state.year).eq('period_month', state.month),
     sb.from('mos_entries').select('*')
       .eq('branch_id', state.branchId)
       .eq('period_year', prev.year).eq('period_month', prev.month),
@@ -270,7 +154,7 @@ async function load() {
 
 function blankRow(salesmanId) {
   const r = { salesman_id: salesmanId, branch_id: state.branchId,
-              period_year: state.active.year, period_month: state.active.month };
+              period_year: state.year, period_month: state.month };
   for (const c of STORED) r[c.key] = c.type === 'text' ? '' : 0;
   return r;
 }
@@ -288,7 +172,7 @@ function renderBand() {
   el.band.innerHTML = `
     <span>Mengisi cabang</span> <b>${escapeHtml(state.branchName)}</b>
     <span class="sep">·</span>
-    <span>Periode</span> <b>${MONTHS[state.active.month - 1]} ${state.active.year}</b>
+    <span>Periode</span> <b>${MONTHS[state.month - 1]} ${state.year}</b>
     <span class="sep">·</span>
     <span>Minggu</span> <b>${state.week}</b>
     <span class="progress">${filled} dari ${state.salesmen.length} sudah diisi</span>
@@ -525,7 +409,7 @@ function onEdit(inp, row, sid) {
 /* ---------- Menyimpan ---------------------------------------------------- */
 function toPayload(sid) {
   const r = state.rows.get(sid);
-  const out = { period_year: state.active.year, period_month: state.active.month,
+  const out = { period_year: state.year, period_month: state.month,
                 branch_id: state.branchId, salesman_id: sid };
   for (const c of STORED) out[c.key] = c.type === 'text' ? (r[c.key] || null) : (Number(r[c.key]) || 0);
   if (r.id) out.id = r.id;
