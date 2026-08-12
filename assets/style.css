@@ -453,6 +453,8 @@ button.link:hover { background: rgba(255,255,255,.08); color: #fff; }
 .acc-summary .stat .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; }
 .acc-summary .stat.saved .dot { background: var(--ok); }
 .acc-summary .stat.pending .dot { background: var(--ochre); }
+.acc-summary .stat.locked .dot { background: var(--muted); }
+.acc-summary .stat.locked { color: var(--muted); }
 .acc-summary .chev { transition: transform .15s; color: var(--muted); }
 .acc-row[data-open="true"] .chev { transform: rotate(90deg); }
 .acc-summary .warnflag { color: var(--ochre); font-size: 13px; }
