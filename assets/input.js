@@ -1,18 +1,21 @@
 /* =====================================================================
-   input.js — tabel ringkas yang bisa dibuka per baris (accordion).
+   input.js — grid Excel-style. Dua tabel:
+   1. "Data bulanan"  — field yang jarang berubah, terlipat, dibuka sesekali.
+   2. "Data minggu ini" — 5 angka yang benar-benar berubah tiap minggu
+      (TM, Act PRTM, Quot Confidence >80%/50-80%/<50%), semua salesman
+      kelihatan sekaligus, bisa diketik/di-Tab/di-paste seperti Excel.
 
-   Baris = salesman, ringkas + status. Diklik, baris itu terbuka
-   menampilkan form lengkap; baris lain otomatis tertutup supaya
-   ketua cabang selalu fokus mengisi satu orang saja.
-
-   Pengaman kekeliruan yang tersemat:
-   1. Papan periode besar di atas, supaya tidak salah cabang/minggu.
-   2. Ringkasan baris (kolom TM/Act PRTM/Total OL PRTM) kelihatan tanpa
-      buka form — jadi ketua cabang bisa cek wajar-tidaknya sekilas.
-   3. Tanda "!" oranye di baris kalau ada angka yang melompat jauh dari
-      minggu lalu, kelihatan bahkan sebelum baris dibuka.
-   4. Setelah simpan, baris otomatis tertutup dan pindah ke baris
-      berikutnya — alur checklist dari atas ke bawah.
+   Pengaman yang tersemat:
+   - Baris yang minggu-nya sudah disubmit terkunci: input disabled, abu-abu.
+     Penguncian sesungguhnya ditegakkan di database (lihat
+     supabase/04_week_submission_lock.sql); ini cuma agar langsung
+     kelihatan di layar tanpa perlu gagal simpan dulu.
+   - Toggle "Tampilkan minggu lalu" menambah baris pembanding tipis di
+     bawah tiap salesman.
+   - Sel yang angkanya melompat jauh dari minggu lalu (naik/turun >2x)
+     disorot kuning.
+   - Konfirmasi sebelum simpan kalau ada minggu yang baru pertama kali
+     disubmit (karena setelah itu terkunci untuk cabang).
    ===================================================================== */
 
 import { sb, requireSession, renderShell, showNote, escapeHtml, defaultPeriod } from './app.js';
@@ -23,8 +26,8 @@ import { COLUMNS, MONTHS, WEEKS, STORED, computeRow, fmt } from './schema.js';
 function showFatalError(err) {
   console.error(err);
   const msg = (err && err.message) ? err.message : String(err);
-  const box = document.getElementById('acctable');
-  if (box) box.innerHTML =
+  const box = document.getElementById('weeklywrap') || document.body;
+  box.innerHTML =
     `<div class="note err" style="display:block;margin:0">
       ⚠️ Terjadi kesalahan teknis: ${msg}<br>
       Coba muat ulang halaman. Kalau masih terjadi, kirim pesan ini ke pengembang.
@@ -39,7 +42,16 @@ renderShell(profile, 'input');
 const isAdmin = profile.role === 'admin';
 const COL = new Map(COLUMNS.map(c => [c.key, c]));
 
-/* Kolom mingguan yang punya pasangan "minggu lalu" untuk dibandingkan. */
+/* Field yang cuma satu nilai per BULAN (bukan per minggu). */
+const MONTHLY_FIELDS = [
+  'market_size_year', 'market_size_month', 'plan_sales_master',
+  'ms_teams_schedule', 'kemampuan_po', 'po_non_sap', 'ol_min_prtm', 'po_last_month',
+];
+
+/* Kolom hasil hitung yang ditampilkan di tabel mingguan. */
+const WEEKLY_CALC = ['lq_total', 'total_ol_prtm', 'balance_prtm', 'total_po', 'total_po_outlook'];
+
+/* Field yang benar-benar per-minggu, dan pasangan "basis" untuk pembanding minggu lalu. */
 const WEEK_FIELDS = {
   lq_tm:    w => `lq_tm_w${w}`,
   act_prtm: w => `act_prtm_w${w}`,
@@ -47,6 +59,16 @@ const WEEK_FIELDS = {
   qc_50_80: w => `qc_w${w}_50_80`,
   qc_lt50:  w => `qc_w${w}_lt50`,
 };
+function weeklyInputCols(w) {
+  return [
+    { key: `lq_tm_w${w}`,    label: `TM W${w}`,    base: 'lq_tm' },
+    { key: `act_prtm_w${w}`, label: `Act PRTM W${w}`, base: 'act_prtm' },
+    { key: `qc_w${w}_gt80`,  label: '>80%',        base: 'qc_gt80' },
+    { key: `qc_w${w}_50_80`, label: '>50–80%',      base: 'qc_50_80' },
+    { key: `qc_w${w}_lt50`,  label: '<50%',         base: 'qc_lt50' },
+  ];
+}
+function weekFieldKeysFor(w) { return weeklyInputCols(w).map(c => c.key); }
 
 const el = {
   ddYear: document.getElementById('dd-year'),
@@ -59,7 +81,11 @@ const el = {
   branch: document.getElementById('f-branch'),
   chips: document.getElementById('periodchips'),
   band: document.getElementById('periodband'),
-  table: document.getElementById('acctable'),
+  monthlyWrap: document.getElementById('monthlywrap'),
+  weeklyWrap: document.getElementById('weeklywrap'),
+  showPrev: document.getElementById('f-showprev'),
+  btnSaveAll: document.getElementById('btn-save-all'),
+  status: document.getElementById('status'),
 };
 
 const thisYear = new Date().getFullYear();
@@ -79,7 +105,6 @@ const state = {
   rows: new Map(),      // salesman_id -> baris bulan berjalan
   prevRows: new Map(),  // salesman_id -> baris bulan sebelumnya (pembanding W1)
   dirty: new Set(),
-  openId: null,          // salesman_id yang barisnya sedang terbuka
 };
 
 /* ---------- Filter Tahun & Bulan (multi-pilih) ------------------------- */
@@ -105,7 +130,7 @@ function renderYearPanel() {
       const y = +cb.value;
       if (cb.checked) state.years.add(y);
       else if (state.years.size > 1) state.years.delete(y);
-      else cb.checked = true; // minimal satu tahun harus tetap terpilih
+      else cb.checked = true;
       el.panelYear.querySelector('#cb-year-all').checked = state.years.size === ALL_YEARS.length;
       afterPeriodFilterChange();
     });
@@ -129,7 +154,7 @@ function renderMonthPanel() {
       const m = +cb.value;
       if (cb.checked) state.months.add(m);
       else if (state.months.size > 1) state.months.delete(m);
-      else cb.checked = true; // minimal satu bulan harus tetap terpilih
+      else cb.checked = true;
       el.panelMonth.querySelector('#cb-month-all').checked = state.months.size === ALL_MONTHS.length;
       afterPeriodFilterChange();
     });
@@ -142,7 +167,6 @@ function renderMonthPanel() {
   updateMonthLabel();
 }
 
-/** Kombinasi tahun × bulan yang terpilih, urut kronologis. */
 function getSelectedPeriods() {
   const ys = [...state.years].sort((a, b) => a - b);
   const ms = [...state.months].sort((a, b) => a - b);
@@ -172,7 +196,6 @@ function renderPeriodChips() {
   });
 }
 
-/** Kalau periode aktif hilang dari hasil filter, otomatis pindah ke yang pertama. */
 function afterPeriodFilterChange() {
   updateYearLabel();
   updateMonthLabel();
@@ -194,6 +217,15 @@ renderPeriodChips();
 /* ---------- Pemilih minggu -------------------------------------------- */
 el.week.innerHTML = WEEKS.map(w =>
   `<button type="button" data-week="${w}" aria-pressed="${w === state.week}">W${w}</button>`).join('');
+el.week.addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-week]');
+  if (!b) return;
+  state.week = +b.dataset.week;
+  [...el.week.children].forEach(x => x.setAttribute('aria-pressed', x === b));
+  renderBand();
+  renderWeeklyGrid();
+});
+el.showPrev.addEventListener('change', renderWeeklyGrid);
 
 /* ---------- Daftar cabang -------------------------------------------- */
 const { data: branches, error: brErr } = await sb
@@ -205,8 +237,10 @@ if (brErr) showNote('note', 'Gagal memuat daftar cabang: ' + brErr.message, 'err
 const allowed = isAdmin ? (branches ?? []) : (branches ?? []).filter(b => b.id === profile.branch_id);
 
 if (!allowed.length) {
-  el.table.innerHTML = '<div class="skeleton">Akun Anda belum dihubungkan ke cabang mana pun. ' +
-                        'Hubungi admin head office.</div>';
+  el.weeklyWrap.innerHTML = '<div class="skeleton">Akun Anda belum dihubungkan ke cabang mana pun. ' +
+                             'Hubungi admin head office.</div>';
+  document.getElementById('monthly-section').style.display = 'none';
+  el.btnSaveAll.disabled = true;
 } else {
   el.branch.innerHTML = allowed.map(b =>
     `<option value="${b.id}">${escapeHtml(b.code)} — ${escapeHtml(b.name)}</option>`).join('');
@@ -216,20 +250,12 @@ if (!allowed.length) {
   await load();
 }
 
-/* ---------- Peristiwa toolbar ----------------------------------------- */
 el.branch.addEventListener('change', () => {
   state.branchId = el.branch.value;
   state.branchName = allowed.find(b => b.id === state.branchId)?.name ?? '';
   load();
 });
-el.week.addEventListener('click', (e) => {
-  const b = e.target.closest('button[data-week]');
-  if (!b) return;
-  state.week = +b.dataset.week;
-  [...el.week.children].forEach(x => x.setAttribute('aria-pressed', x === b));
-  renderBand();
-  renderTable();
-});
+el.btnSaveAll.addEventListener('click', saveAll);
 
 window.addEventListener('beforeunload', (e) => {
   if (state.dirty.size) { e.preventDefault(); e.returnValue = ''; }
@@ -243,8 +269,10 @@ function prevPeriod(year, month) {
 async function load() {
   if (state.dirty.size && !confirm('Ada perubahan yang belum disimpan. Tinggalkan halaman ini?')) return;
   state.dirty.clear();
+  refreshDirtyCount();
   el.band.innerHTML = '';
-  el.table.innerHTML = '<div class="skeleton">Memuat data…</div>';
+  el.monthlyWrap.innerHTML = '<div class="skeleton">Memuat…</div>';
+  el.weeklyWrap.innerHTML = '<div class="skeleton">Memuat data…</div>';
   showNote('note', '');
 
   const { year, month } = state.active;
@@ -274,13 +302,14 @@ async function load() {
   }
 
   if (!state.salesmen.length) {
-    el.table.innerHTML = '<div class="skeleton">Cabang ini belum punya salesman terdaftar.</div>';
+    el.monthlyWrap.innerHTML = '';
+    el.weeklyWrap.innerHTML = '<div class="skeleton">Cabang ini belum punya salesman terdaftar.</div>';
     return;
   }
 
-  state.openId = null;
   renderBand();
-  renderTable();
+  renderMonthlyGrid();
+  renderWeeklyGrid();
 }
 
 function blankRow(salesmanId) {
@@ -310,7 +339,7 @@ function renderBand() {
   `;
 }
 
-/* ---------- Pembanding minggu lalu -------------------------------------- */
+/* ---------- Pembanding minggu lalu & kunci ------------------------------ */
 function prevValue(fieldBase, row, sid) {
   const tpl = WEEK_FIELDS[fieldBase];
   if (!tpl) return null;
@@ -325,18 +354,6 @@ function isAnomaly(curr, prev) {
   return ratio >= 2 || ratio <= 0.5;
 }
 
-function hintHtml(fieldBase, key, row, sid) {
-  if (!WEEK_FIELDS[fieldBase]) return '';
-  const prev = prevValue(fieldBase, row, sid);
-  if (prev === null) return `<p class="fieldhint">Belum ada data minggu lalu untuk dibandingkan.</p>`;
-  const label = state.week > 1 ? `Minggu ${state.week - 1}` : 'Minggu lalu (bulan sebelumnya)';
-  const c = COL.get(key);
-  const warn = isAnomaly(row[key], prev)
-    ? `<span class="warn">— beda jauh dari minggu lalu, cek lagi</span>` : '';
-  return `<p class="fieldhint">${label}: <b>${fmt(prev, c)}</b> ${warn}</p>`;
-}
-
-/** Salesman ini punya angka mingguan yang mencurigakan? (untuk tanda di ringkasan) */
 function rowHasAnomaly(row, sid) {
   return Object.entries(WEEK_FIELDS).some(([base, tpl]) => {
     const key = tpl(state.week);
@@ -344,211 +361,158 @@ function rowHasAnomaly(row, sid) {
   });
 }
 
-/* ---------- Field helpers ---------------------------------------------- */
-function fieldHtml(key, row, label, weekFieldBase, sid, disabled) {
-  const c = COL.get(key);
-  const value = row[key] ?? (c.type === 'text' ? '' : 0);
-  const text = c.type === 'text';
-  const dis = disabled ? ' disabled' : '';
-  return `
-    <div class="field">
-      <label for="f-${key}">${escapeHtml(label ?? lastPath(c))}<span class="colref">${c.col}</span></label>
-      ${text
-        ? `<textarea id="f-${key}" rows="2" data-key="${key}"${dis}>${escapeHtml(value)}</textarea>`
-        : `<input type="number" step="any" inputmode="decimal" id="f-${key}" data-key="${key}" value="${value}"${dis}>`}
-      ${weekFieldBase ? `<div data-hint="${key}">${hintHtml(weekFieldBase, key, row, sid)}</div>` : ''}
-    </div>`;
-}
-
-function calcHtml(key, calc, label) {
-  const c = COL.get(key);
-  return `
-    <div class="calcbox" data-calc="${key}">
-      <span>${escapeHtml(label ?? lastPath(c))} <span class="colref">${c.col}</span></span>
-      <b class="${calc[key] < 0 ? 'neg' : ''}">${fmt(calc[key], c)}</b>
-    </div>`;
-}
-
-function lastPath(c) { return c.path[c.path.length - 1]; }
-
 /** Minggu ini sudah disubmit & terkunci untuk cabang? (admin selalu bebas) */
 function isWeekLocked(row) {
   return !isAdmin && !!row[`w${state.week}_submitted`];
 }
 
-/* ---------- Tabel accordion --------------------------------------------- */
-function renderTable() {
-  const w = state.week;
+/* ---------- Tabel: Data bulanan ----------------------------------------- */
+function renderMonthlyGrid() {
+  const cols = MONTHLY_FIELDS.map(k => COL.get(k));
 
-  const rowsHtml = state.salesmen.map(s => {
+  let html = '<table class="mos"><thead><tr><th class="sticky-only">SALESMAN</th>';
+  for (const c of cols) html += `<th>${escapeHtml(c.path[c.path.length - 1])}</th>`;
+  html += '</tr></thead><tbody>';
+
+  for (const s of state.salesmen) {
+    const row = state.rows.get(s.id);
+    html += `<tr data-sid="${s.id}"><td class="sticky-only">${escapeHtml(s.name)}</td>`;
+    for (const c of cols) {
+      const v = row[c.key] ?? (c.type === 'text' ? '' : 0);
+      html += c.type === 'text'
+        ? `<td class="txt"><input type="text" data-key="${c.key}" value="${escapeHtml(v)}"></td>`
+        : `<td><input type="number" step="any" inputmode="decimal" data-key="${c.key}" value="${v}"></td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  el.monthlyWrap.innerHTML = html;
+
+  el.monthlyWrap.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('input', () => onGridEdit(inp));
+  });
+}
+
+/* ---------- Tabel: Data minggu ini --------------------------------------- */
+function renderWeeklyGrid() {
+  const w = state.week;
+  const inputCols = weeklyInputCols(w);
+  const showPrev = el.showPrev.checked;
+  const calcLabels = {
+    lq_total: 'Total', total_ol_prtm: 'Total OL PRTM', balance_prtm: 'Balance PRTM',
+    total_po: 'Total PO', total_po_outlook: 'Total PO Outlook',
+  };
+
+  let html = '<table class="mos"><thead><tr><th class="sticky-only">SALESMAN</th>';
+  for (const c of inputCols) html += `<th class="live">${escapeHtml(c.label)}</th>`;
+  for (const k of WEEKLY_CALC) html += `<th>${escapeHtml(calcLabels[k])}</th>`;
+  html += '<th>STATUS</th></tr></thead><tbody>';
+
+  for (const s of state.salesmen) {
     const row = state.rows.get(s.id);
     const calc = computeRow(row, w);
-    const isOpen = s.id === state.openId;
     const locked = isWeekLocked(row);
+    const anomaly = rowHasAnomaly(row, s.id);
     const statusCls = state.dirty.has(s.id) ? 'pending' : locked ? 'locked' : (row.id || hasAnyData(row)) ? 'saved' : '';
     const statusTxt = state.dirty.has(s.id) ? 'Belum disimpan' : locked ? '🔒 Terkunci' : row.id ? 'Tersimpan' : 'Kosong';
-    const anomaly = rowHasAnomaly(row, s.id);
 
-    return `
-      <div class="acc-row" data-sid="${s.id}" data-open="${isOpen}">
-        <button type="button" class="acc-summary">
-          <span>${escapeHtml(s.name)}</span>
-          <span class="num">${fmt(row[`lq_tm_w${w}`], COL.get('lq_tm_w1'))}</span>
-          <span class="num">${fmt(row[`act_prtm_w${w}`], COL.get('act_prtm_w1'))}</span>
-          <span class="stat ${statusCls}">${anomaly ? '<span class="warnflag" title="Ada angka beda jauh dari minggu lalu">!</span>' : ''}<span class="dot"></span><span class="stat-label">${statusTxt}</span></span>
-          <span class="chev">›</span>
-        </button>
-        ${isOpen ? `<div class="acc-body">${formBody(s, row, calc)}</div>` : ''}
-      </div>`;
-  }).join('');
+    html += `<tr data-sid="${s.id}" class="${locked ? 'locked-row' : ''}">` +
+            `<td class="sticky-only">${escapeHtml(s.name)}${anomaly ? ' <span class="warnflag" title="Ada angka beda jauh dari minggu lalu">!</span>' : ''}</td>`;
+    for (const c of inputCols) {
+      const v = row[c.key] ?? 0;
+      const anom = isAnomaly(v, prevValue(c.base, row, s.id));
+      html += `<td class="${anom ? 'anomaly' : ''}"><input type="number" step="any" inputmode="decimal" data-key="${c.key}" data-base="${c.base}" value="${v}"${locked ? ' disabled' : ''}></td>`;
+    }
+    for (const k of WEEKLY_CALC) {
+      const v = calc[k];
+      html += `<td class="calc ${v < 0 ? 'neg' : ''}">${fmt(v, COL.get(k))}</td>`;
+    }
+    html += `<td class="stat ${statusCls}"><span class="dot"></span><span class="stat-label">${statusTxt}</span></td></tr>`;
 
-  el.table.innerHTML = `
-    <div class="acc-head">
-      <span>Salesman</span><span>TM W${w}</span><span>Act PRTM W${w}</span><span>Status</span><span></span>
-    </div>
-    ${rowsHtml}
-  `;
-
-  el.table.querySelectorAll('.acc-summary').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const sid = btn.closest('.acc-row').dataset.sid;
-      state.openId = state.openId === sid ? null : sid;
-      showNote('note', '');
-      renderTable();
-      if (state.openId) {
-        document.querySelector(`.acc-row[data-sid="${state.openId}"]`)
-          ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (showPrev) {
+      html += `<tr class="prevrow"><td class="sticky-only">↳ minggu ${state.week > 1 ? state.week - 1 : '4 (bln lalu)'}</td>`;
+      for (const c of inputCols) {
+        const pv = prevValue(c.base, row, s.id);
+        html += `<td>${pv === null ? '—' : fmt(pv, COL.get(c.key))}</td>`;
       }
-    });
-  });
-
-  const openForm = el.table.querySelector('.acc-body form');
-  if (openForm) {
-    const sid = state.openId;
-    const row = state.rows.get(sid);
-    openForm.querySelectorAll('input, textarea').forEach(inp => {
-      inp.addEventListener('input', () => onEdit(inp, row, sid));
-    });
-    openForm.addEventListener('submit', (e) => onSaveAndNext(e, sid));
+      html += `<td colspan="${WEEKLY_CALC.length + 1}"></td></tr>`;
+    }
   }
+  html += '</tbody></table>';
+  el.weeklyWrap.innerHTML = html;
+
+  el.weeklyWrap.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('input', () => onGridEdit(inp));
+  });
+  el.weeklyWrap.addEventListener('paste', onPaste);
 }
 
-function formBody(s, row, calc) {
-  const w = state.week;
-  const idx = state.salesmen.findIndex(x => x.id === s.id);
-  const isLast = idx === state.salesmen.length - 1;
-  const locked = isWeekLocked(row);
-
-  return `
-    <form>
-      ${locked ? `<div class="note info" style="display:block">
-        🔒 Data minggu ${w} untuk salesman ini sudah disubmit dan terkunci.
-        Hanya admin head office yang bisa mengubah angka minggu ini.
-        Field umum (Market Size, Plan Sales Master, dll) masih bisa diubah.
-      </div>` : ''}
-
-      <div class="row" style="margin-bottom:16px">
-        ${fieldHtml('market_size_year',  row, 'Market Size / Tahun')}
-        ${fieldHtml('market_size_month', row, 'Market Size / Bulan')}
-        ${fieldHtml('plan_sales_master', row, 'Plan Sales Master')}
-      </div>
-
-      <details class="group" open>
-        <summary>Live Quotation by CRM</summary>
-        <div class="body">
-          <div class="row">
-            ${fieldHtml(`lq_tm_w${w}`, row, `TM Minggu Berjalan (W${w})`, 'lq_tm', s.id, locked)}
-            ${fieldHtml('lq_lm', row, 'LM (Bulan Lalu)')}
-          </div>
-          <div style="margin-top:12px">${calcHtml('lq_total', calc, 'Total (TM + LM)')}</div>
-        </div>
-      </details>
-
-      <details class="group" open>
-        <summary>Outlook PRTM</summary>
-        <div class="body">
-          ${fieldHtml(`act_prtm_w${w}`, row, `Act PRTM by SO SAP (W${w})`, 'act_prtm', s.id, locked)}
-
-          <p class="subhead">Quot Confidence (W${w})</p>
-          <div class="row">
-            ${fieldHtml(`qc_w${w}_gt80`,  row, '> 80%',       'qc_gt80', s.id, locked)}
-            ${fieldHtml(`qc_w${w}_50_80`, row, '> 50% – 80%', 'qc_50_80', s.id, locked)}
-            ${fieldHtml(`qc_w${w}_lt50`,  row, '< 50%',       'qc_lt50', s.id, locked)}
-          </div>
-
-          <p class="subhead">Total PRTM</p>
-          <div class="row">
-            ${fieldHtml('po_non_sap', row, 'PO Non SAP')}
-          </div>
-          <div style="margin:12px 0">${calcHtml('total_ol_prtm', calc, 'Total OL PRTM')}</div>
-
-          <div class="row">
-            ${fieldHtml('ol_min_prtm', row, 'OL Min PRTM')}
-          </div>
-          <div style="margin:12px 0">${calcHtml('balance_prtm', calc, 'Balance PRTM (OL − Plan PRTM)')}</div>
-
-          <div class="row">
-            ${fieldHtml('po_last_month', row, 'PO Bulan Lalu (by SAP)')}
-          </div>
-          <div class="row" style="margin-top:12px">
-            ${calcHtml('total_po', calc, 'Total PO (POCO+PRTM)')}
-            ${calcHtml('total_po_outlook', calc, 'Total PO Outlook')}
-          </div>
-        </div>
-      </details>
-
-      <details class="group">
-        <summary>Jadwal &amp; Catatan</summary>
-        <div class="body">
-          ${fieldHtml('ms_teams_schedule', row, 'MS Teams Schedule')}
-          <div style="margin-top:14px">
-            ${fieldHtml('kemampuan_po', row, 'Kemampuan Memenuhi PO dari Quotation (80%, 50–80%)')}
-          </div>
-        </div>
-      </details>
-
-      <div class="formbar">
-        <button type="submit">${isLast ? 'Simpan (salesman terakhir)' : 'Simpan & Lanjut →'}</button>
-        <span class="hint">${statusText(row)}</span>
-      </div>
-    </form>`;
-}
-
-function statusText(row) {
-  return row.updated_at
-    ? 'Tersimpan ' + new Date(row.updated_at).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })
-    : 'Belum pernah disimpan.';
-}
-
-function onEdit(inp, row, sid) {
+/* ---------- Edit sel (perbarui kalkulasi tanpa render ulang tabel) -------- */
+function onGridEdit(inp) {
+  const tr = inp.closest('tr[data-sid]');
+  const sid = tr.dataset.sid;
+  const row = state.rows.get(sid);
   const key = inp.dataset.key;
   const c = COL.get(key);
   row[key] = c.type === 'text' ? inp.value : (parseFloat(inp.value) || 0);
   state.dirty.add(sid);
+  refreshDirtyCount();
 
-  const body = inp.closest('.acc-body');
-  const calc = computeRow(row, state.week);
-  body.querySelectorAll('[data-calc]').forEach(box => {
-    const k = box.dataset.calc;
-    const b = box.querySelector('b');
-    b.textContent = fmt(calc[k], COL.get(k));
-    b.classList.toggle('neg', calc[k] < 0);
+  const statCell = tr.querySelector('td.stat');
+  if (statCell) {
+    statCell.className = 'stat pending';
+    statCell.innerHTML = '<span class="dot"></span><span class="stat-label">Belum disimpan</span>';
+  }
+
+  if (!inp.closest('#weeklywrap')) return; // field bulanan: cukup tandai dirty, tidak ada kalkulasi di tabel ini
+
+  const w = state.week;
+  const calc = computeRow(row, w);
+  const calcCells = tr.querySelectorAll('td.calc');
+  WEEKLY_CALC.forEach((k, i) => {
+    const v = calc[k];
+    calcCells[i].textContent = fmt(v, COL.get(k));
+    calcCells[i].classList.toggle('neg', v < 0);
   });
 
-  for (const [base, tpl] of Object.entries(WEEK_FIELDS)) {
-    if (tpl(state.week) === key) {
-      const holder = body.querySelector(`[data-hint="${key}"]`);
-      if (holder) holder.innerHTML = hintHtml(base, key, row, sid);
-    }
+  const base = inp.dataset.base;
+  if (base) {
+    inp.closest('td').classList.toggle('anomaly', isAnomaly(row[key], prevValue(base, row, sid)));
   }
+}
 
-  const summary = document.querySelector(`.acc-row[data-sid="${sid}"] .stat`);
-  if (summary) {
-    summary.classList.add('pending');
-    summary.classList.remove('saved');
-    const label = summary.querySelector('.stat-label');
-    if (label) label.textContent = 'Belum disimpan';
-  }
+function refreshDirtyCount() {
+  const n = document.getElementById('dirty-count');
+  if (n) n.textContent = state.dirty.size;
+}
+
+/* ---------- Tempel blok dari Excel ---------------------------------------- */
+function onPaste(e) {
+  const start = e.target;
+  if (!start.matches('input')) return;
+  const text = e.clipboardData.getData('text/plain');
+  if (!text.includes('\t') && !text.includes('\n')) return;
+  e.preventDefault();
+
+  const matrix = text.replace(/\r/g, '').replace(/\n$/, '').split('\n').map(l => l.split('\t'));
+  const rows = [...el.weeklyWrap.querySelectorAll('tbody tr[data-sid]')];
+  const r0 = rows.indexOf(start.closest('tr'));
+  const inputsOf = tr => [...tr.querySelectorAll('input')];
+  const c0 = inputsOf(rows[r0]).indexOf(start);
+
+  matrix.forEach((line, i) => {
+    const tr = rows[r0 + i];
+    if (!tr) return;
+    const inputs = inputsOf(tr);
+    line.forEach((cell, j) => {
+      const inp = inputs[c0 + j];
+      if (!inp || inp.disabled) return;
+      inp.value = parseFloat(String(cell).replace(/\./g, '').replace(',', '.')) || 0;
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  });
+
+  showNote('note', `${matrix.length} baris ditempel. Periksa dulu, lalu klik Simpan Semua.`, 'info');
 }
 
 /* ---------- Menyimpan ---------------------------------------------------- */
@@ -557,7 +521,13 @@ function toPayload(sid) {
   const out = { period_year: state.active.year, period_month: state.active.month,
                 branch_id: state.branchId, salesman_id: sid };
   for (const c of STORED) out[c.key] = c.type === 'text' ? (r[c.key] || null) : (Number(r[c.key]) || 0);
-  out[`w${state.week}_submitted`] = true;
+
+  // Kunci minggu ini hanya kalau angka mingguannya benar-benar diisi (bukan nol semua),
+  // supaya menyimpan perubahan field bulanan saja tidak ikut mengunci minggu ini.
+  const w = state.week;
+  const touchedWeek = weekFieldKeysFor(w).some(k => Number(r[k]) !== 0);
+  if (touchedWeek) out[`w${w}_submitted`] = true;
+
   if (r.id) out.id = r.id;
   return out;
 }
@@ -582,38 +552,36 @@ async function persist(sids) {
     if (row) { row.id = d.id; row.updated_at = d.updated_at; }
     state.dirty.delete(d.salesman_id);
   }
+  refreshDirtyCount();
   return true;
 }
 
-/** Simpan salesman yang sedang terbuka, tutup barisnya, lalu buka baris berikutnya. */
-async function onSaveAndNext(e, sid) {
-  e.preventDefault();
-  showNote('note', '');
-  const row = state.rows.get(sid);
+async function saveAll() {
+  if (!state.dirty.size) { showNote('note', 'Tidak ada perubahan untuk disimpan.', 'info'); return; }
 
-  if (state.dirty.has(sid)) {
-    if (!isAdmin && !row[`w${state.week}_submitted`]) {
-      const proceed = confirm(
-        `Setelah disimpan, data minggu ${state.week} untuk salesman ini akan terkunci — ` +
-        `hanya admin head office yang bisa mengubahnya lagi. Lanjutkan simpan?`);
-      if (!proceed) return;
-    }
-    const ok = await persist([sid]);
-    if (!ok) return;
+  const w = state.week;
+  const firstTimeCount = [...state.dirty].filter(sid => {
+    const r = state.rows.get(sid);
+    const touchedWeek = weekFieldKeysFor(w).some(k => Number(r[k]) !== 0);
+    return !isAdmin && touchedWeek && !r[`w${w}_submitted`];
+  }).length;
+
+  if (firstTimeCount > 0) {
+    const proceed = confirm(
+      `Menyimpan akan mengunci data minggu ${w} untuk ${firstTimeCount} salesman yang baru pertama kali ` +
+      `disubmit minggu ini — tidak bisa diubah lagi kecuali oleh admin head office. Lanjutkan?`);
+    if (!proceed) return;
   }
 
-  const idx = state.salesmen.findIndex(x => x.id === sid);
-  const isLast = idx === state.salesmen.length - 1;
+  showNote('note', '');
+  el.btnSaveAll.disabled = true;
+  const ok = await persist([...state.dirty]);
+  el.btnSaveAll.disabled = false;
 
-  showNote('note', isLast
-    ? 'Tersimpan. Semua salesman di cabang ini sudah dilalui — silakan cek di View Data.'
-    : 'Tersimpan.', 'ok');
-
-  state.openId = isLast ? null : state.salesmen[idx + 1].id;
-  renderBand();
-  renderTable();
-  if (state.openId) {
-    document.querySelector(`.acc-row[data-sid="${state.openId}"]`)
-      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (ok) {
+    showNote('note', 'Semua perubahan tersimpan.', 'ok');
+    renderBand();
+    renderMonthlyGrid();
+    renderWeeklyGrid();
   }
 }
