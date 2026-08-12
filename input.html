@@ -9,11 +9,11 @@
 <body>
 <div id="shell"></div>
 
-<main class="wrap">
+<main class="wrap-wide">
   <div class="page-head">
     <p class="eyebrow">Input Data</p>
     <h1>Isi laporan cabang</h1>
-    <p>Klik nama salesman untuk membuka isiannya. Hanya satu yang terbuka pada satu waktu, supaya tidak salah taruh angka.</p>
+    <p>Ketik langsung di tabel, seperti mengisi Excel — bisa pindah antar sel pakai Tab, atau tempel (paste) blok angka dari Excel. Baris yang sudah terkunci tidak bisa diketik lagi.</p>
   </div>
 
   <div class="toolbar">
@@ -47,8 +47,30 @@
 
   <div id="periodband" class="periodband"></div>
 
-  <div id="acctable" class="acctable">
-    <div class="skeleton">Memuat data…</div>
+  <details class="group" id="monthly-section">
+    <summary>Data bulanan (Market Size, Plan Sales Master, dll — jarang berubah)</summary>
+    <div class="body">
+      <div class="tablewrap" id="monthlywrap" style="max-height:none">
+        <div class="skeleton">Memuat…</div>
+      </div>
+    </div>
+  </details>
+
+  <div class="card" style="margin-top:16px">
+    <div class="row" style="align-items:center;justify-content:space-between;margin-bottom:12px;grid-template-columns:1fr auto">
+      <p class="subhead" style="margin:0">Data minggu ini</p>
+      <label style="display:flex;gap:7px;align-items:center;font-size:12.5px;cursor:pointer;white-space:nowrap">
+        <input type="checkbox" id="f-showprev" style="width:auto;margin:0"> Tampilkan minggu lalu
+      </label>
+    </div>
+    <div class="tablewrap" id="weeklywrap" style="max-height:none">
+      <div class="skeleton">Memuat data…</div>
+    </div>
+  </div>
+
+  <div class="formbar" style="margin-top:16px">
+    <button id="btn-save-all">Simpan Semua Perubahan (<span id="dirty-count">0</span>)</button>
+    <span class="hint" id="status"></span>
   </div>
 </main>
 
