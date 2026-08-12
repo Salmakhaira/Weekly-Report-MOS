@@ -18,6 +18,21 @@
 import { sb, requireSession, renderShell, showNote, escapeHtml, defaultPeriod } from './app.js';
 import { COLUMNS, MONTHS, WEEKS, STORED, computeRow, fmt } from './schema.js';
 
+/* Kalau ada error tak terduga di mana pun, tampilkan di layar supaya
+   halaman tidak diam-diam "macet" tanpa penjelasan. */
+function showFatalError(err) {
+  console.error(err);
+  const msg = (err && err.message) ? err.message : String(err);
+  const box = document.getElementById('acctable');
+  if (box) box.innerHTML =
+    `<div class="note err" style="display:block;margin:0">
+      ⚠️ Terjadi kesalahan teknis: ${msg}<br>
+      Coba muat ulang halaman. Kalau masih terjadi, kirim pesan ini ke pengembang.
+    </div>`;
+}
+window.addEventListener('error', (e) => showFatalError(e.error || e.message));
+window.addEventListener('unhandledrejection', (e) => showFatalError(e.reason));
+
 const { profile } = await requireSession();
 renderShell(profile, 'input');
 
