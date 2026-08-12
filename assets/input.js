@@ -34,16 +34,30 @@ const WEEK_FIELDS = {
 };
 
 const el = {
-  year: document.getElementById('f-year'),
-  month: document.getElementById('f-month'),
+  ddYear: document.getElementById('dd-year'),
+  panelYear: document.getElementById('panel-year'),
+  lblYear: document.getElementById('lbl-year'),
+  ddMonth: document.getElementById('dd-month'),
+  panelMonth: document.getElementById('panel-month'),
+  lblMonth: document.getElementById('lbl-month'),
   week: document.getElementById('f-week'),
   branch: document.getElementById('f-branch'),
+  chips: document.getElementById('periodchips'),
   band: document.getElementById('periodband'),
   table: document.getElementById('acctable'),
 };
 
+const thisYear = new Date().getFullYear();
+const ALL_YEARS = [];
+for (let y = thisYear - 2; y <= thisYear + 1; y++) ALL_YEARS.push(y);
+const ALL_MONTHS = MONTHS.map((_, i) => i + 1);
+
+const DEFAULT = defaultPeriod();
 const state = {
-  ...defaultPeriod(),
+  years: new Set([DEFAULT.year]),
+  months: new Set([DEFAULT.month]),
+  active: { year: DEFAULT.year, month: DEFAULT.month },
+  week: DEFAULT.week,
   branchId: null,
   branchName: '',
   salesmen: [],
@@ -53,13 +67,116 @@ const state = {
   openId: null,          // salesman_id yang barisnya sedang terbuka
 };
 
-/* ---------- Pemilih periode ------------------------------------------ */
-const thisYear = new Date().getFullYear();
-for (let y = thisYear - 2; y <= thisYear + 1; y++) {
-  el.year.insertAdjacentHTML('beforeend', `<option value="${y}"${y === state.year ? ' selected' : ''}>${y}</option>`);
+/* ---------- Filter Tahun & Bulan (multi-pilih) ------------------------- */
+function updateYearLabel() {
+  const n = state.years.size;
+  el.lblYear.textContent = n === ALL_YEARS.length ? 'Semua tahun'
+    : n === 1 ? [...state.years][0] : `${n} tahun`;
 }
-MONTHS.forEach((m, i) => el.month.insertAdjacentHTML('beforeend',
-  `<option value="${i + 1}"${i + 1 === state.month ? ' selected' : ''}>${m}</option>`));
+function updateMonthLabel() {
+  const n = state.months.size;
+  el.lblMonth.textContent = n === ALL_MONTHS.length ? 'Semua bulan'
+    : n === 1 ? MONTHS[[...state.months][0] - 1] : `${n} bulan`;
+}
+
+function renderYearPanel() {
+  el.panelYear.innerHTML = `
+    <label class="fd-all"><input type="checkbox" id="cb-year-all"> Semua tahun</label>
+    ${ALL_YEARS.map(y => `<label><input type="checkbox" value="${y}" ${state.years.has(y) ? 'checked' : ''}> ${y}</label>`).join('')}
+  `;
+  el.panelYear.querySelector('#cb-year-all').checked = state.years.size === ALL_YEARS.length;
+  el.panelYear.querySelectorAll('input[type=checkbox]:not(#cb-year-all)').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const y = +cb.value;
+      if (cb.checked) state.years.add(y);
+      else if (state.years.size > 1) state.years.delete(y);
+      else cb.checked = true; // minimal satu tahun harus tetap terpilih
+      el.panelYear.querySelector('#cb-year-all').checked = state.years.size === ALL_YEARS.length;
+      afterPeriodFilterChange();
+    });
+  });
+  el.panelYear.querySelector('#cb-year-all').addEventListener('change', (e) => {
+    state.years = new Set(e.target.checked ? ALL_YEARS : [DEFAULT.year]);
+    renderYearPanel();
+    afterPeriodFilterChange();
+  });
+  updateYearLabel();
+}
+
+function renderMonthPanel() {
+  el.panelMonth.innerHTML = `
+    <label class="fd-all"><input type="checkbox" id="cb-month-all"> Semua bulan</label>
+    ${ALL_MONTHS.map(m => `<label><input type="checkbox" value="${m}" ${state.months.has(m) ? 'checked' : ''}> ${MONTHS[m - 1]}</label>`).join('')}
+  `;
+  el.panelMonth.querySelector('#cb-month-all').checked = state.months.size === ALL_MONTHS.length;
+  el.panelMonth.querySelectorAll('input[type=checkbox]:not(#cb-month-all)').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const m = +cb.value;
+      if (cb.checked) state.months.add(m);
+      else if (state.months.size > 1) state.months.delete(m);
+      else cb.checked = true; // minimal satu bulan harus tetap terpilih
+      el.panelMonth.querySelector('#cb-month-all').checked = state.months.size === ALL_MONTHS.length;
+      afterPeriodFilterChange();
+    });
+  });
+  el.panelMonth.querySelector('#cb-month-all').addEventListener('change', (e) => {
+    state.months = new Set(e.target.checked ? ALL_MONTHS : [DEFAULT.month]);
+    renderMonthPanel();
+    afterPeriodFilterChange();
+  });
+  updateMonthLabel();
+}
+
+/** Kombinasi tahun × bulan yang terpilih, urut kronologis. */
+function getSelectedPeriods() {
+  const ys = [...state.years].sort((a, b) => a - b);
+  const ms = [...state.months].sort((a, b) => a - b);
+  const out = [];
+  for (const y of ys) for (const m of ms) out.push({ year: y, month: m });
+  return out;
+}
+
+function renderPeriodChips() {
+  const periods = getSelectedPeriods();
+  if (periods.length <= 1) { el.chips.innerHTML = ''; return; }
+  el.chips.innerHTML = periods.map(p => {
+    const isActive = p.year === state.active.year && p.month === state.active.month;
+    return `<button type="button" data-y="${p.year}" data-m="${p.month}" aria-pressed="${isActive}">
+              ${MONTHS[p.month - 1].slice(0, 3)} ${p.year}
+            </button>`;
+  }).join('');
+  el.chips.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const y = +btn.dataset.y, m = +btn.dataset.m;
+      if (y === state.active.year && m === state.active.month) return;
+      if (state.dirty.size && !confirm('Ada perubahan yang belum disimpan. Pindah periode?')) return;
+      state.active = { year: y, month: m };
+      renderPeriodChips();
+      load();
+    });
+  });
+}
+
+/** Kalau periode aktif hilang dari hasil filter, otomatis pindah ke yang pertama. */
+function afterPeriodFilterChange() {
+  updateYearLabel();
+  updateMonthLabel();
+  const periods = getSelectedPeriods();
+  const stillValid = periods.some(p => p.year === state.active.year && p.month === state.active.month);
+  if (!stillValid) {
+    state.active = periods[0];
+    renderPeriodChips();
+    load();
+  } else {
+    renderPeriodChips();
+  }
+}
+
+renderYearPanel();
+renderMonthPanel();
+renderPeriodChips();
+
+/* ---------- Pemilih minggu -------------------------------------------- */
 el.week.innerHTML = WEEKS.map(w =>
   `<button type="button" data-week="${w}" aria-pressed="${w === state.week}">W${w}</button>`).join('');
 
@@ -85,8 +202,6 @@ if (!allowed.length) {
 }
 
 /* ---------- Peristiwa toolbar ----------------------------------------- */
-el.year.addEventListener('change', () => { state.year = +el.year.value; load(); });
-el.month.addEventListener('change', () => { state.month = +el.month.value; load(); });
 el.branch.addEventListener('change', () => {
   state.branchId = el.branch.value;
   state.branchName = allowed.find(b => b.id === state.branchId)?.name ?? '';
@@ -117,14 +232,15 @@ async function load() {
   el.table.innerHTML = '<div class="skeleton">Memuat data…</div>';
   showNote('note', '');
 
-  const prev = prevPeriod(state.year, state.month);
+  const { year, month } = state.active;
+  const prev = prevPeriod(year, month);
 
   const [{ data: salesmen, error: e1 }, { data: entries, error: e2 }, { data: prevEntries }] = await Promise.all([
     sb.from('salesmen').select('id, name, sort_order')
       .eq('branch_id', state.branchId).eq('is_active', true).order('sort_order'),
     sb.from('mos_entries').select('*')
       .eq('branch_id', state.branchId)
-      .eq('period_year', state.year).eq('period_month', state.month),
+      .eq('period_year', year).eq('period_month', month),
     sb.from('mos_entries').select('*')
       .eq('branch_id', state.branchId)
       .eq('period_year', prev.year).eq('period_month', prev.month),
@@ -154,7 +270,7 @@ async function load() {
 
 function blankRow(salesmanId) {
   const r = { salesman_id: salesmanId, branch_id: state.branchId,
-              period_year: state.year, period_month: state.month };
+              period_year: state.active.year, period_month: state.active.month };
   for (const c of STORED) r[c.key] = c.type === 'text' ? '' : 0;
   return r;
 }
@@ -172,7 +288,7 @@ function renderBand() {
   el.band.innerHTML = `
     <span>Mengisi cabang</span> <b>${escapeHtml(state.branchName)}</b>
     <span class="sep">·</span>
-    <span>Periode</span> <b>${MONTHS[state.month - 1]} ${state.year}</b>
+    <span>Periode</span> <b>${MONTHS[state.active.month - 1]} ${state.active.year}</b>
     <span class="sep">·</span>
     <span>Minggu</span> <b>${state.week}</b>
     <span class="progress">${filled} dari ${state.salesmen.length} sudah diisi</span>
@@ -214,16 +330,17 @@ function rowHasAnomaly(row, sid) {
 }
 
 /* ---------- Field helpers ---------------------------------------------- */
-function fieldHtml(key, row, label, weekFieldBase, sid) {
+function fieldHtml(key, row, label, weekFieldBase, sid, disabled) {
   const c = COL.get(key);
   const value = row[key] ?? (c.type === 'text' ? '' : 0);
   const text = c.type === 'text';
+  const dis = disabled ? ' disabled' : '';
   return `
     <div class="field">
       <label for="f-${key}">${escapeHtml(label ?? lastPath(c))}<span class="colref">${c.col}</span></label>
       ${text
-        ? `<textarea id="f-${key}" rows="2" data-key="${key}">${escapeHtml(value)}</textarea>`
-        : `<input type="number" step="any" inputmode="decimal" id="f-${key}" data-key="${key}" value="${value}">`}
+        ? `<textarea id="f-${key}" rows="2" data-key="${key}"${dis}>${escapeHtml(value)}</textarea>`
+        : `<input type="number" step="any" inputmode="decimal" id="f-${key}" data-key="${key}" value="${value}"${dis}>`}
       ${weekFieldBase ? `<div data-hint="${key}">${hintHtml(weekFieldBase, key, row, sid)}</div>` : ''}
     </div>`;
 }
@@ -239,6 +356,11 @@ function calcHtml(key, calc, label) {
 
 function lastPath(c) { return c.path[c.path.length - 1]; }
 
+/** Minggu ini sudah disubmit & terkunci untuk cabang? (admin selalu bebas) */
+function isWeekLocked(row) {
+  return !isAdmin && !!row[`w${state.week}_submitted`];
+}
+
 /* ---------- Tabel accordion --------------------------------------------- */
 function renderTable() {
   const w = state.week;
@@ -247,8 +369,9 @@ function renderTable() {
     const row = state.rows.get(s.id);
     const calc = computeRow(row, w);
     const isOpen = s.id === state.openId;
-    const statusCls = state.dirty.has(s.id) ? 'pending' : (row.id || hasAnyData(row)) ? 'saved' : '';
-    const statusTxt = state.dirty.has(s.id) ? 'Belum disimpan' : row.id ? 'Tersimpan' : 'Kosong';
+    const locked = isWeekLocked(row);
+    const statusCls = state.dirty.has(s.id) ? 'pending' : locked ? 'locked' : (row.id || hasAnyData(row)) ? 'saved' : '';
+    const statusTxt = state.dirty.has(s.id) ? 'Belum disimpan' : locked ? '🔒 Terkunci' : row.id ? 'Tersimpan' : 'Kosong';
     const anomaly = rowHasAnomaly(row, s.id);
 
     return `
@@ -299,9 +422,16 @@ function formBody(s, row, calc) {
   const w = state.week;
   const idx = state.salesmen.findIndex(x => x.id === s.id);
   const isLast = idx === state.salesmen.length - 1;
+  const locked = isWeekLocked(row);
 
   return `
     <form>
+      ${locked ? `<div class="note info" style="display:block">
+        🔒 Data minggu ${w} untuk salesman ini sudah disubmit dan terkunci.
+        Hanya admin head office yang bisa mengubah angka minggu ini.
+        Field umum (Market Size, Plan Sales Master, dll) masih bisa diubah.
+      </div>` : ''}
+
       <div class="row" style="margin-bottom:16px">
         ${fieldHtml('market_size_year',  row, 'Market Size / Tahun')}
         ${fieldHtml('market_size_month', row, 'Market Size / Bulan')}
@@ -312,7 +442,7 @@ function formBody(s, row, calc) {
         <summary>Live Quotation by CRM</summary>
         <div class="body">
           <div class="row">
-            ${fieldHtml(`lq_tm_w${w}`, row, `TM Minggu Berjalan (W${w})`, 'lq_tm', s.id)}
+            ${fieldHtml(`lq_tm_w${w}`, row, `TM Minggu Berjalan (W${w})`, 'lq_tm', s.id, locked)}
             ${fieldHtml('lq_lm', row, 'LM (Bulan Lalu)')}
           </div>
           <div style="margin-top:12px">${calcHtml('lq_total', calc, 'Total (TM + LM)')}</div>
@@ -322,13 +452,13 @@ function formBody(s, row, calc) {
       <details class="group" open>
         <summary>Outlook PRTM</summary>
         <div class="body">
-          ${fieldHtml(`act_prtm_w${w}`, row, `Act PRTM by SO SAP (W${w})`, 'act_prtm', s.id)}
+          ${fieldHtml(`act_prtm_w${w}`, row, `Act PRTM by SO SAP (W${w})`, 'act_prtm', s.id, locked)}
 
           <p class="subhead">Quot Confidence (W${w})</p>
           <div class="row">
-            ${fieldHtml(`qc_w${w}_gt80`,  row, '> 80%',       'qc_gt80', s.id)}
-            ${fieldHtml(`qc_w${w}_50_80`, row, '> 50% – 80%', 'qc_50_80', s.id)}
-            ${fieldHtml(`qc_w${w}_lt50`,  row, '< 50%',       'qc_lt50', s.id)}
+            ${fieldHtml(`qc_w${w}_gt80`,  row, '> 80%',       'qc_gt80', s.id, locked)}
+            ${fieldHtml(`qc_w${w}_50_80`, row, '> 50% – 80%', 'qc_50_80', s.id, locked)}
+            ${fieldHtml(`qc_w${w}_lt50`,  row, '< 50%',       'qc_lt50', s.id, locked)}
           </div>
 
           <p class="subhead">Total PRTM</p>
@@ -409,9 +539,10 @@ function onEdit(inp, row, sid) {
 /* ---------- Menyimpan ---------------------------------------------------- */
 function toPayload(sid) {
   const r = state.rows.get(sid);
-  const out = { period_year: state.year, period_month: state.month,
+  const out = { period_year: state.active.year, period_month: state.active.month,
                 branch_id: state.branchId, salesman_id: sid };
   for (const c of STORED) out[c.key] = c.type === 'text' ? (r[c.key] || null) : (Number(r[c.key]) || 0);
+  out[`w${state.week}_submitted`] = true;
   if (r.id) out.id = r.id;
   return out;
 }
@@ -443,8 +574,15 @@ async function persist(sids) {
 async function onSaveAndNext(e, sid) {
   e.preventDefault();
   showNote('note', '');
+  const row = state.rows.get(sid);
 
   if (state.dirty.has(sid)) {
+    if (!isAdmin && !row[`w${state.week}_submitted`]) {
+      const proceed = confirm(
+        `Setelah disimpan, data minggu ${state.week} untuk salesman ini akan terkunci — ` +
+        `hanya admin head office yang bisa mengubahnya lagi. Lanjutkan simpan?`);
+      if (!proceed) return;
+    }
     const ok = await persist([sid]);
     if (!ok) return;
   }
