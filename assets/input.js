@@ -43,17 +43,13 @@ const isAdmin = profile.role === 'admin';
 const COL = new Map(COLUMNS.map(c => [c.key, c]));
 
 /* Field yang cuma satu nilai per BULAN (bukan per minggu). */
-const MONTHLY_FIELDS = [
-  'market_size_year', 'market_size_month', 'plan_sales_master',
-  'ms_teams_schedule', 'kemampuan_po', 'po_non_sap', 'ol_min_prtm', 'po_last_month',
-];
+const MONTHLY_FIELDS = ['plan_sales_master', 'po_non_sap', 'ol_min_prtm', 'po_last_month'];
 
 /* Kolom hasil hitung yang ditampilkan di tabel mingguan. */
-const WEEKLY_CALC = ['lq_total', 'total_ol_prtm', 'balance_prtm', 'total_po', 'total_po_outlook'];
+const WEEKLY_CALC = ['total_ol_prtm', 'balance_prtm', 'total_po', 'total_po_outlook'];
 
 /* Field yang benar-benar per-minggu, dan pasangan "basis" untuk pembanding minggu lalu. */
 const WEEK_FIELDS = {
-  lq_tm:    w => `lq_tm_w${w}`,
   act_prtm: w => `act_prtm_w${w}`,
   qc_gt80:  w => `qc_w${w}_gt80`,
   qc_50_80: w => `qc_w${w}_50_80`,
@@ -61,7 +57,6 @@ const WEEK_FIELDS = {
 };
 function weeklyInputCols(w) {
   return [
-    { key: `lq_tm_w${w}`,    label: `TM W${w}`,    base: 'lq_tm' },
     { key: `act_prtm_w${w}`, label: `Act PRTM W${w}`, base: 'act_prtm' },
     { key: `qc_w${w}_gt80`,  label: '>80%',        base: 'qc_gt80' },
     { key: `qc_w${w}_50_80`, label: '>50–80%',      base: 'qc_50_80' },
@@ -399,7 +394,7 @@ function renderWeeklyGrid() {
   const inputCols = weeklyInputCols(w);
   const showPrev = el.showPrev.checked;
   const calcLabels = {
-    lq_total: 'Total', total_ol_prtm: 'Total OL PRTM', balance_prtm: 'Balance PRTM',
+    total_ol_prtm: 'Total OL PRTM', balance_prtm: 'Balance PRTM',
     total_po: 'Total PO', total_po_outlook: 'Total PO Outlook',
   };
 
