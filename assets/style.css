@@ -516,6 +516,12 @@ table.mos .sticky-1, table.mos .sticky-2, table.mos .sticky-3 {
   border-right: 1px solid var(--line);
 }
 table.mos .sticky-1 { left: 0;     min-width: 44px;  }
+table.mos .sticky-only {
+  position: sticky; left: 0; min-width: 200px;
+  background: var(--surface); text-align: left; font-family: var(--font-ui); z-index: 10;
+  border-right: 1px solid var(--line);
+}
+table.mos thead .sticky-only { background: #e9eeec; z-index: 30; }
 table.mos .sticky-2 { left: 44px;  min-width: 62px;  }
 table.mos .sticky-3 { left: 106px; min-width: 220px; }
 table.mos thead .sticky-1, table.mos thead .sticky-2, table.mos thead .sticky-3 {
@@ -555,6 +561,31 @@ tr.grand   td.neg { color: #ffd9d9; }
 .trendtable th:first-child, .trendtable td:first-child { text-align: left; font-family: var(--font-ui); }
 .trendtable td.neg { color: var(--danger); }
 .trendtable tr:last-child td { border-bottom: none; }
+
+table.mos td input[type=number], table.mos td input[type=text] {
+  width: 100%; min-width: 64px; border: 1px solid transparent; background: transparent;
+  padding: 3px 5px; font-family: var(--font-num); font-size: 12px; text-align: right;
+  border-radius: 3px; color: var(--ink);
+}
+table.mos td input[type=text] { text-align: left; font-family: var(--font-ui); min-width: 140px; }
+table.mos td input:hover { border-color: var(--line); background: var(--surface); }
+table.mos td input:focus { outline: none; border-color: var(--accent); background: #fff; box-shadow: 0 0 0 2px var(--accent-sft); }
+table.mos td input:disabled { color: var(--muted); background: transparent; cursor: not-allowed; }
+table.mos td.calc { background: var(--line-soft); color: var(--graphite); }
+table.mos td.anomaly { background: #fdf0dc; }
+table.mos td.anomaly input { background: #fdf0dc; }
+table.mos tr.locked-row td { background: #f4f4f2; }
+table.mos tr.locked-row td.sticky-only { background: #f4f4f2; }
+table.mos tr.prevrow td { color: var(--muted); font-size: 11px; font-style: italic; background: var(--paper); border-bottom: 1px solid var(--line); }
+table.mos tr.prevrow td.sticky-only { background: var(--paper); padding-left: 22px; }
+table.mos thead th.live { background: var(--accent); color: #fff; }
+table.mos td .warnflag { color: var(--ochre); font-size: 12px; }
+table.mos td.stat { text-align: left; }
+table.mos td.stat .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--line); margin-right: 6px; }
+table.mos td.stat.saved .dot { background: var(--ok); }
+table.mos td.stat.pending .dot { background: var(--ochre); }
+table.mos td.stat.locked .dot { background: var(--muted); }
+table.mos td.stat.locked { color: var(--muted); }
 
 .legend {
   display: flex; flex-wrap: wrap; gap: 16px;
