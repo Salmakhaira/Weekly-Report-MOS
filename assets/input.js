@@ -1,4 +1,24 @@
-import { sb, requireSession, renderShell, showNote, escapeHtml, defaultPeriod } from './app.js';
+/* =====================================================================
+   input.js — grid Excel-style. Dua tabel:
+   1. "Data bulanan"  — field yang jarang berubah, terlipat, dibuka sesekali.
+   2. "Data minggu ini" — 5 angka yang benar-benar berubah tiap minggu
+      (TM, Act PRTM, Quot Confidence >80%/50-80%/<50%), semua salesman
+      kelihatan sekaligus, bisa diketik/di-Tab/di-paste seperti Excel.
+
+   Pengaman yang tersemat:
+   - Baris yang minggu-nya sudah disubmit terkunci: input disabled, abu-abu.
+     Penguncian sesungguhnya ditegakkan di database (lihat
+     supabase/04_week_submission_lock.sql); ini cuma agar langsung
+     kelihatan di layar tanpa perlu gagal simpan dulu.
+   - Toggle "Tampilkan minggu lalu" menambah baris pembanding tipis di
+     bawah tiap salesman.
+   - Sel yang angkanya melompat jauh dari minggu lalu (naik/turun >2x)
+     disorot kuning.
+   - Konfirmasi sebelum simpan kalau ada minggu yang baru pertama kali
+     disubmit (karena setelah itu terkunci untuk cabang).
+   ===================================================================== */
+
+import { sb, requireSession, renderShell, showNote, escapeHtml, defaultPeriod, closeFilterDropdownsOnOutsideClick } from './app.js';
 import { COLUMNS, MONTHS, WEEKS, STORED, computeRow, fmt } from './schema.js';
 
 /* Kalau ada error tak terduga di mana pun, tampilkan di layar supaya
@@ -6,11 +26,13 @@ import { COLUMNS, MONTHS, WEEKS, STORED, computeRow, fmt } from './schema.js';
 function showFatalError(err) {
   console.error(err);
   const msg = (err && err.message) ? err.message : String(err);
+  const where = (err && err.stack) ? String(err.stack).split('\n').slice(0, 2).join(' | ') : '';
   const box = document.getElementById('weeklywrap') || document.body;
   box.innerHTML =
     `<div class="note err" style="display:block;margin:0">
       ⚠️ Terjadi kesalahan teknis: ${msg}<br>
       Coba muat ulang halaman. Kalau masih terjadi, kirim pesan ini ke pengembang.
+      ${where ? `<br><span style="font-family:monospace;font-size:11px;opacity:.7">${where.replace(/</g, '&lt;')}</span>` : ''}
     </div>`;
 }
 window.addEventListener('error', (e) => showFatalError(e.error || e.message));
@@ -188,6 +210,7 @@ function afterPeriodFilterChange() {
 renderYearPanel();
 renderMonthPanel();
 renderPeriodChips();
+closeFilterDropdownsOnOutsideClick();
 
 /* ---------- Pemilih minggu -------------------------------------------- */
 el.week.innerHTML = WEEKS.map(w =>
@@ -503,7 +526,6 @@ function toPayload(sid) {
   const touchedWeek = weekFieldKeysFor(w).some(k => Number(r[k]) !== 0);
   if (touchedWeek) out[`w${w}_submitted`] = true;
 
-  if (r.id) out.id = r.id;
   return out;
 }
 
