@@ -17,7 +17,13 @@ import { COLUMNS, MONTHS, WEEKS, computeRow, aggregate, buildHeaderMatrix, fmt }
 const { profile } = await requireSession();
 renderShell(profile, 'view');
 
-const TREND_KEYS = ['total_ol_prtm', 'balance_prtm', 'total_po', 'total_po_outlook'];
+const TREND_METRICS = [
+  { key: 'total_ol_prtm',    label: 'Total OL PRTM' },
+  { key: 'balance_prtm',     label: 'Balance PRTM' },
+  { key: 'total_po',         label: 'Total PO' },
+  { key: 'total_po_outlook', label: 'Total PO Outlook' },
+];
+const MONTH_ABBR = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
 
 const el = {
   ddYear: document.getElementById('dd-year'),
@@ -47,6 +53,8 @@ const state = {
   branchFilter: '',
   areas: [], branches: [], salesmen: [], entries: [],
   isSingle: true,
+  trendMetric: 'total_ol_prtm',
+  expandedYears: new Set(),
 };
 
 /* ---------- Checklist Tahun & Bulan (multi-pilih) ----------------------- */
@@ -147,11 +155,28 @@ async function loadMasters() {
 
 async function load() {
   el.wrap.innerHTML = '<div class="skeleton">Memuat data…</div>';
-  const { data, error } = await sb.from('mos_entries').select('*')
-    .in('period_year', [...state.years]).in('period_month', [...state.months]);
+  state.isSingle = state.years.size === 1 && state.months.size === 1;
+
+  let query = sb.from('mos_entries').select('*');
+  if (state.isSingle) {
+    const [y] = state.years, [m] = state.months;
+    query = query.eq('period_year', y).eq('period_month', m);
+  } else {
+    // Mode tren: ambil semua bulan (bukan cuma yang dicentang di filter bulan,
+    // karena kolom tahun bisa dibuka jadi 12 bulan kapan saja), plus 1 tahun
+    // sebelum tahun paling awal yang dipilih, supaya badge %perubahan tahun
+    // pertama tetap punya pembanding.
+    const years = [...state.years];
+    const minY = Math.min(...years) - 1;
+    const maxY = Math.max(...years);
+    const range = [];
+    for (let y = minY; y <= maxY; y++) range.push(y);
+    query = query.in('period_year', range);
+  }
+
+  const { data, error } = await query;
   if (error) { showNote('note', 'Gagal memuat data: ' + error.message, 'err'); return; }
   state.entries = data ?? [];
-  state.isSingle = state.years.size === 1 && state.months.size === 1;
   showNote('note', state.entries.length ? '' : 'Belum ada data untuk periode yang dipilih.', 'info');
   el.detailWrap.style.display = state.isSingle ? '' : 'none';
   draw();
@@ -245,64 +270,106 @@ function drawDetail() {
   el.wrap.innerHTML = html;
 }
 
-/* ---------- Mode TREN (lebih dari satu periode) -------------------------- */
-function periodCombos() {
-  const combos = [];
-  for (const y of [...state.years].sort((a, b) => a - b)) {
-    for (const m of [...state.months].sort((a, b) => a - b)) combos.push({ year: y, month: m });
+/* ---------- Mode TREN (lebih dari satu periode) — kolom tahun bisa dibuka -- */
+function trendRowsSpec() {
+  if (state.branchFilter) {
+    const b = state.branches.find(x => x.id === state.branchFilter);
+    return [{ label: b?.name ?? '', branchIds: [state.branchFilter], kind: 'branch' }];
   }
-  return combos;
+  const rows = state.branches.map(b => ({ label: b.name, branchIds: [b.id], kind: 'branch' }));
+  rows.push({ label: 'GRAND TOTAL', branchIds: state.branches.map(b => b.id), kind: 'grand' });
+  return rows;
 }
 
-function buildTrendModel() {
-  const branchIds = state.branchFilter
-    ? [state.branchFilter]
-    : state.branches.map(b => b.id);
+/** Jumlahkan data satu tahun penuh (month=null) atau satu bulan tertentu,
+    untuk kumpulan cabang tertentu, lalu hitung rumus (pakai minggu terpilih). */
+function aggFor(branchIds, year, month) {
   const salesmenIds = new Set(state.salesmen.filter(s => branchIds.includes(s.branch_id)).map(s => s.id));
-
-  return periodCombos().map(({ year, month }) => {
-    const raws = state.entries.filter(e =>
-      e.period_year === year && e.period_month === month && salesmenIds.has(e.salesman_id));
-    return { year, month, data: aggregate(raws, state.week) };
-  });
+  const raws = state.entries.filter(e =>
+    e.period_year === year && (month ? e.period_month === month : true) && salesmenIds.has(e.salesman_id));
+  return aggregate(raws, state.week);
 }
 
-function drawTrend() {
+function pctBadge(curr, prev) {
+  const c = Number(curr) || 0, p = Number(prev) || 0;
+  if (!p) return '';
+  const pct = ((c - p) / Math.abs(p)) * 100;
+  const cls = pct >= 0 ? 'up' : 'down';
+  const arrow = pct >= 0 ? '▲' : '▼';
+  return `<span class="pct ${cls}">${arrow} ${Math.abs(pct).toLocaleString('id-ID', { maximumFractionDigits: 1 })}%</span>`;
+}
+
+function drawTrendExpandable() {
+  const years = [...state.years].sort((a, b) => a - b);
+  const metricCol = COLUMNS.find(c => c.key === state.trendMetric);
+  const rows = trendRowsSpec();
+
+  let head1 = '<th class="sticky-only" rowspan="2">CABANG</th>';
+  let head2 = '';
+  for (const y of years) {
+    const open = state.expandedYears.has(y);
+    if (open) {
+      head1 += `<th colspan="13" class="year-toggle" data-year="${y}"><span class="yr-icon">−</span>${y}</th>`;
+      MONTH_ABBR.forEach(m => head2 += `<th>${m}</th>`);
+      head2 += `<th>Total</th>`;
+    } else {
+      head1 += `<th rowspan="2" class="year-toggle" data-year="${y}"><span class="yr-icon">+</span>${y}</th>`;
+    }
+  }
+
+  let body = '';
+  for (const row of rows) {
+    body += `<tr class="${row.kind}"><td class="sticky-only">${escapeHtml(row.label)}</td>`;
+    for (const y of years) {
+      if (state.expandedYears.has(y)) {
+        for (let m = 1; m <= 12; m++) {
+          const v = aggFor(row.branchIds, y, m)[state.trendMetric];
+          body += `<td class="${Number(v) < 0 ? 'neg' : ''}">${escapeHtml(fmt(v, metricCol))}</td>`;
+        }
+      }
+      const total = aggFor(row.branchIds, y, null)[state.trendMetric];
+      const prevTotal = aggFor(row.branchIds, y - 1, null)[state.trendMetric];
+      body += `<td class="${Number(total) < 0 ? 'neg' : ''}">${escapeHtml(fmt(total, metricCol))}${pctBadge(total, prevTotal)}</td>`;
+    }
+    body += '</tr>';
+  }
+
   const scope = state.branchFilter
     ? state.branches.find(b => b.id === state.branchFilter)?.name ?? ''
-    : 'Nasional (semua cabang)';
-
-  const cols = TREND_KEYS.map(k => COLUMNS.find(c => c.key === k));
-
-  let html = `
-    <table class="trendtable">
-      <thead><tr>
-        <th>Periode</th>
-        ${cols.map(c => `<th>${escapeHtml(c.path[c.path.length - 1])}</th>`).join('')}
-      </tr></thead>
-      <tbody>`;
-
-  for (const row of buildTrendModel()) {
-    html += `<tr><td>${MONTHS[row.month - 1]} ${row.year}</td>`;
-    for (const c of cols) {
-      const v = row.data[c.key];
-      html += `<td class="${Number(v) < 0 ? 'neg' : ''}">${escapeHtml(fmt(v, c))}</td>`;
-    }
-    html += '</tr>';
-  }
-  html += '</tbody></table>';
+    : 'semua cabang';
 
   el.wrap.innerHTML = `
-    <p class="hint" style="margin:0 0 10px">
-      Menampilkan tren <b>${escapeHtml(scope)}</b>, minggu ${state.week}, dijumlah per periode
-      (bukan tabel detail — pilih 1 bulan &amp; 1 tahun saja untuk melihat rincian per cabang/salesman).
-    </p>
-    ${html}`;
+    <div class="trendtoolbar">
+      <label>Metrik:
+        <select id="trend-metric">
+          ${TREND_METRICS.map(m => `<option value="${m.key}" ${m.key === state.trendMetric ? 'selected' : ''}>${m.label}</option>`).join('')}
+        </select>
+      </label>
+      <span class="hint">
+        Menampilkan <b>${escapeHtml(scope)}</b>. Klik nama tahun untuk buka/tutup rincian per bulan.
+        Kolom "Total" tiap tahun = jumlah angka minggu ${state.week} dari tiap bulan yang ada datanya —
+        bukan total transaksi setahun penuh, karena rumus di sistem ini memang berbasis angka minggu
+        tertentu, bukan angka yang mengalir/terakumulasi.
+      </span>
+    </div>
+    <table class="trendtable"><thead><tr>${head1}</tr><tr>${head2}</tr></thead><tbody>${body}</tbody></table>`;
+
+  document.getElementById('trend-metric').addEventListener('change', (e) => {
+    state.trendMetric = e.target.value;
+    drawTrendExpandable();
+  });
+  el.wrap.querySelectorAll('.year-toggle').forEach(th => {
+    th.addEventListener('click', () => {
+      const y = +th.dataset.year;
+      if (state.expandedYears.has(y)) state.expandedYears.delete(y); else state.expandedYears.add(y);
+      drawTrendExpandable();
+    });
+  });
 }
 
 function draw() {
   el.legend.style.display = state.isSingle ? '' : 'none';
-  if (state.isSingle) drawDetail(); else drawTrend();
+  if (state.isSingle) drawDetail(); else drawTrendExpandable();
 }
 
 /* ---------- Ekspor ---------------------------------------------------- */
@@ -332,12 +399,26 @@ function toDetailMatrix() {
 }
 
 function toTrendMatrix() {
-  const cols = TREND_KEYS.map(k => COLUMNS.find(c => c.key === k));
-  const rows = [['Periode', ...cols.map(c => c.path[c.path.length - 1])]];
-  for (const r of buildTrendModel()) {
-    rows.push([`${MONTHS[r.month - 1]} ${r.year}`, ...cols.map(c => Number(r.data[c.key]) || 0)]);
+  const years = [...state.years].sort((a, b) => a - b);
+  const metricCol = COLUMNS.find(c => c.key === state.trendMetric);
+  const rows = trendRowsSpec();
+
+  const header = ['Cabang'];
+  for (const y of years) {
+    MONTH_ABBR.forEach(m => header.push(`${m} ${y}`));
+    header.push(`Total ${y}`);
   }
-  return { name: `Tren MOS ${[...state.years].join('-')}`, rows };
+
+  const matrix = [header];
+  for (const row of rows) {
+    const line = [row.label];
+    for (const y of years) {
+      for (let m = 1; m <= 12; m++) line.push(Number(aggFor(row.branchIds, y, m)[state.trendMetric]) || 0);
+      line.push(Number(aggFor(row.branchIds, y, null)[state.trendMetric]) || 0);
+    }
+    matrix.push(line);
+  }
+  return { name: `Tren ${metricCol.path[metricCol.path.length - 1]} ${years.join('-')}`, rows: matrix };
 }
 
 async function exportFile() {
