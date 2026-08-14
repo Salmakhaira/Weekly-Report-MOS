@@ -300,7 +300,7 @@ function pctBadge(curr, prev) {
   const pct = ((c - p) / Math.abs(p)) * 100;
   const cls = pct >= 0 ? 'up' : 'down';
   const arrow = pct >= 0 ? '▲' : '▼';
-  return `<span class="pct ${cls}">${arrow} ${Math.abs(pct).toLocaleString('id-ID', { maximumFractionDigits: 1 })}%</span>`;
+  return `<span class="pct ${cls}">${arrow} ${Math.abs(pct).toLocaleString('en-US', { maximumFractionDigits: 1 })}%</span>`;
 }
 
 /** Sel "Total" untuk tahun yang TERTUTUP: tampilkan keempat metrik sekaligus,
