@@ -18,10 +18,10 @@ const { profile } = await requireSession();
 renderShell(profile, 'view');
 
 const TREND_METRICS = [
-  { key: 'total_ol_prtm',    label: 'Total OL PRTM' },
-  { key: 'balance_prtm',     label: 'Balance PRTM' },
-  { key: 'total_po',         label: 'Total PO' },
-  { key: 'total_po_outlook', label: 'Total PO Outlook' },
+  { key: 'total_ol_prtm',    label: 'Total OL PRTM',    short: 'OL PRTM' },
+  { key: 'balance_prtm',     label: 'Balance PRTM',     short: 'Balance' },
+  { key: 'total_po',         label: 'Total PO',         short: 'PO' },
+  { key: 'total_po_outlook', label: 'Total PO Outlook', short: 'Outlook' },
 ];
 const MONTH_ABBR = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
 
@@ -292,11 +292,31 @@ function aggFor(branchIds, year, month) {
 
 function pctBadge(curr, prev) {
   const c = Number(curr) || 0, p = Number(prev) || 0;
-  if (!p) return '';
+  // Kalau salah satu periode masih kosong (belum ada data sama sekali),
+  // jangan tampilkan badge — itu bukan perbandingan yang bermakna
+  // ("turun ke nol" vs "memang belum diisi" adalah dua hal berbeda).
+  if (!p || !c) return '';
   const pct = ((c - p) / Math.abs(p)) * 100;
   const cls = pct >= 0 ? 'up' : 'down';
   const arrow = pct >= 0 ? '▲' : '▼';
   return `<span class="pct ${cls}">${arrow} ${Math.abs(pct).toLocaleString('id-ID', { maximumFractionDigits: 1 })}%</span>`;
+}
+
+/** Sel "Total" untuk tahun yang TERTUTUP: tampilkan keempat metrik sekaligus,
+    metrik yang sedang aktif (dipilih di dropdown) ditebalkan + diberi badge. */
+function collapsedYearCell(branchIds, y) {
+  const rows = TREND_METRICS.map(m => {
+    const total = aggFor(branchIds, y, null)[m.key];
+    const prevTotal = aggFor(branchIds, y - 1, null)[m.key];
+    const active = m.key === state.trendMetric;
+    const col = COLUMNS.find(c => c.key === m.key);
+    return `<div class="mm-row${active ? ' active' : ''}">
+      <span class="mm-label">${escapeHtml(m.short)}</span>
+      <span class="mm-val ${Number(total) < 0 ? 'neg' : ''}">${escapeHtml(fmt(total, col))}</span>
+      ${active ? pctBadge(total, prevTotal) : ''}
+    </div>`;
+  }).join('');
+  return `<td class="multimetric">${rows}</td>`;
 }
 
 function drawTrendExpandable() {
@@ -311,7 +331,7 @@ function drawTrendExpandable() {
     if (open) {
       head1 += `<th colspan="13" class="year-toggle" data-year="${y}"><span class="yr-icon">−</span>${y}</th>`;
       MONTH_ABBR.forEach(m => head2 += `<th>${m}</th>`);
-      head2 += `<th>Total</th>`;
+      head2 += `<th>Total (${escapeHtml(metricCol.path[metricCol.path.length - 1])})</th>`;
     } else {
       head1 += `<th rowspan="2" class="year-toggle" data-year="${y}"><span class="yr-icon">+</span>${y}</th>`;
     }
@@ -326,10 +346,12 @@ function drawTrendExpandable() {
           const v = aggFor(row.branchIds, y, m)[state.trendMetric];
           body += `<td class="${Number(v) < 0 ? 'neg' : ''}">${escapeHtml(fmt(v, metricCol))}</td>`;
         }
+        const total = aggFor(row.branchIds, y, null)[state.trendMetric];
+        const prevTotal = aggFor(row.branchIds, y - 1, null)[state.trendMetric];
+        body += `<td class="${Number(total) < 0 ? 'neg' : ''}">${escapeHtml(fmt(total, metricCol))}${pctBadge(total, prevTotal)}</td>`;
+      } else {
+        body += collapsedYearCell(row.branchIds, y);
       }
-      const total = aggFor(row.branchIds, y, null)[state.trendMetric];
-      const prevTotal = aggFor(row.branchIds, y - 1, null)[state.trendMetric];
-      body += `<td class="${Number(total) < 0 ? 'neg' : ''}">${escapeHtml(fmt(total, metricCol))}${pctBadge(total, prevTotal)}</td>`;
     }
     body += '</tr>';
   }
@@ -340,16 +362,15 @@ function drawTrendExpandable() {
 
   el.wrap.innerHTML = `
     <div class="trendtoolbar">
-      <label>Metrik:
+      <label>Metrik aktif (dipakai saat tahun dibuka):
         <select id="trend-metric">
           ${TREND_METRICS.map(m => `<option value="${m.key}" ${m.key === state.trendMetric ? 'selected' : ''}>${m.label}</option>`).join('')}
         </select>
       </label>
       <span class="hint">
-        Menampilkan <b>${escapeHtml(scope)}</b>. Klik nama tahun untuk buka/tutup rincian per bulan.
-        Kolom "Total" tiap tahun = jumlah angka minggu ${state.week} dari tiap bulan yang ada datanya —
-        bukan total transaksi setahun penuh, karena rumus di sistem ini memang berbasis angka minggu
-        tertentu, bukan angka yang mengalir/terakumulasi.
+        Menampilkan <b>${escapeHtml(scope)}</b>. Kolom tahun tertutup menampilkan keempat metrik sekaligus;
+        klik nama tahun untuk buka rincian per bulan (fokus ke metrik aktif saja).
+        Total tiap tahun = jumlah angka minggu ${state.week} dari tiap bulan yang ada datanya.
       </span>
     </div>
     <table class="trendtable"><thead><tr>${head1}</tr><tr>${head2}</tr></thead><tbody>${body}</tbody></table>`;
@@ -372,72 +393,168 @@ function draw() {
   if (state.isSingle) drawDetail(); else drawTrendExpandable();
 }
 
-/* ---------- Ekspor ---------------------------------------------------- */
-function toDetailMatrix() {
-  const [year] = state.years;
-  const [month] = state.months;
-  const cols = COLUMNS;
-  const head = buildHeaderMatrix(cols);
-  const rows = [];
+/* ---------- Ekspor Excel (rapi: judul, header tebal, lebar kolom, beku) --- */
+const FILL_TITLE  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF12211F' } };
+const FILL_HEAD   = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE9EEEC' } };
+const FILL_BRANCH = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFF4F2' } };
+const FILL_AREA   = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDFE8E5' } };
+const FILL_TOTAL  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF243935' } };
+const FILL_GRAND  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F6E64' } };
+const THIN_BORDER = { style: 'thin', color: { argb: 'FFD9E0DC' } };
+const NUMFMT = '#,##0.######';
 
-  for (let lvl = 0; lvl < 3; lvl++) {
-    const line = lvl === 0 ? ['NO', 'PLANT', 'BRANCH'] : ['', '', ''];
-    for (const c of cols) line.push(c.path[lvl] ?? '');
-    rows.push(line);
+function styleTitleRow(ws, rowNum, text, size, lastCol) {
+  ws.mergeCells(rowNum, 1, rowNum, lastCol);
+  const cell = ws.getCell(rowNum, 1);
+  cell.value = text;
+  cell.font = { bold: true, size, color: { argb: size >= 14 ? 'FFFFFFFF' : 'FF12211F' } };
+  cell.alignment = { vertical: 'middle', horizontal: 'left' };
+  if (size >= 14) {
+    for (let c = 1; c <= lastCol; c++) ws.getCell(rowNum, c).fill = FILL_TITLE;
   }
-
-  for (const r of buildDetailModel(year, month)) {
-    if (r.kind === 'spacer') { rows.push([]); continue; }
-    const line = [r.no, r.plant, r.name];
-    for (const c of cols) {
-      const v = r.data?.[c.key];
-      line.push(c.type === 'text' ? (v ?? '') : (Number(v) || 0));
-    }
-    rows.push(line);
-  }
-  return { name: `MOS ${MONTHS[month - 1]} ${year} W${state.week}`, rows };
 }
 
-function toTrendMatrix() {
+function writeHeaderRow(ws, rowNum, labels) {
+  labels.forEach((label, i) => {
+    const cell = ws.getCell(rowNum, i + 1);
+    cell.value = label;
+    cell.font = { bold: true, size: 10 };
+    cell.fill = FILL_HEAD;
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    cell.border = { top: THIN_BORDER, bottom: THIN_BORDER, left: THIN_BORDER, right: THIN_BORDER };
+  });
+  ws.getRow(rowNum).height = 46;
+}
+
+function writeDataCell(ws, r, c, value, isText, negative) {
+  const cell = ws.getCell(r, c);
+  if (isText) {
+    cell.value = value ?? '';
+  } else {
+    cell.value = Number(value) || 0;
+    cell.numFmt = NUMFMT;
+    if (negative) cell.font = { color: { argb: 'FFA32B2B' } };
+  }
+  cell.border = { bottom: { style: 'hair', color: { argb: 'FFEEF1EF' } } };
+}
+
+async function buildDetailSheet(wb) {
+  const [year] = state.years, [month] = state.months;
+  const cols = COLUMNS;
+  const lastCol = 3 + cols.length;
+  const ws = wb.addWorksheet(`MOS ${MONTHS[month - 1]} ${year} W${state.week}`.slice(0, 31));
+
+  styleTitleRow(ws, 1, 'WEEKLY REPORT MOS NASIONAL', 14, lastCol);
+  styleTitleRow(ws, 2, `${MONTHS[month - 1]} ${year} · Minggu ${state.week}${state.branchFilter ? ' · ' + (state.branches.find(b => b.id === state.branchFilter)?.name ?? '') : ''}`, 11, lastCol);
+  styleTitleRow(ws, 3, `Diekspor: ${new Date().toLocaleString('id-ID', { dateStyle: 'full', timeStyle: 'short' })}`, 9, lastCol);
+  ws.getRow(3).font = { italic: true, size: 9, color: { argb: 'FF74837F' } };
+
+  const headerRow = 5;
+  const labels = ['NO', 'PLANT', 'BRANCH', ...cols.map(c => c.path.join(' — '))];
+  writeHeaderRow(ws, headerRow, labels);
+
+  ws.getColumn(1).width = 6;
+  ws.getColumn(2).width = 10;
+  ws.getColumn(3).width = 24;
+  for (let i = 0; i < cols.length; i++) ws.getColumn(4 + i).width = 15;
+
+  let r = headerRow + 1;
+  for (const row of buildDetailModel(year, month)) {
+    if (row.kind === 'spacer') { r++; continue; }
+    writeDataCell(ws, r, 1, row.no, true);
+    writeDataCell(ws, r, 2, row.plant, true);
+    writeDataCell(ws, r, 3, row.name, true);
+    cols.forEach((c, i) => {
+      const v = row.data?.[c.key];
+      writeDataCell(ws, r, 4 + i, v, c.type === 'text', Number(v) < 0);
+    });
+    const fill = { branch: FILL_BRANCH, area: FILL_AREA, total: FILL_TOTAL, grand: FILL_GRAND }[row.kind];
+    if (fill) {
+      const bold = row.kind === 'total' || row.kind === 'grand';
+      const white = row.kind === 'total' || row.kind === 'grand';
+      for (let c = 1; c <= lastCol; c++) {
+        const cell = ws.getCell(r, c);
+        cell.fill = fill;
+        if (bold) cell.font = { ...(cell.font ?? {}), bold: true, color: { argb: white ? 'FFFFFFFF' : cell.font?.color?.argb } };
+      }
+    }
+    r++;
+  }
+
+  ws.views = [{ state: 'frozen', xSplit: 3, ySplit: headerRow }];
+}
+
+async function buildTrendSheet(wb) {
   const years = [...state.years].sort((a, b) => a - b);
   const metricCol = COLUMNS.find(c => c.key === state.trendMetric);
   const rows = trendRowsSpec();
+  const lastCol = 1 + years.length * 13;
+  const ws = wb.addWorksheet(`Tren ${metricCol.path[metricCol.path.length - 1]} ${years.join('-')}`.slice(0, 31));
 
-  const header = ['Cabang'];
-  for (const y of years) {
-    MONTH_ABBR.forEach(m => header.push(`${m} ${y}`));
-    header.push(`Total ${y}`);
-  }
+  const scope = state.branchFilter
+    ? state.branches.find(b => b.id === state.branchFilter)?.name ?? '' : 'Semua cabang';
+  styleTitleRow(ws, 1, 'WEEKLY REPORT MOS NASIONAL — TREN', 14, lastCol);
+  styleTitleRow(ws, 2, `${metricCol.path[metricCol.path.length - 1]} · ${scope} · Minggu ${state.week}`, 11, lastCol);
+  styleTitleRow(ws, 3, `Diekspor: ${new Date().toLocaleString('id-ID', { dateStyle: 'full', timeStyle: 'short' })}. Total tahun = jumlah angka minggu ${state.week} tiap bulan.`, 9, lastCol);
+  ws.getRow(3).font = { italic: true, size: 9, color: { argb: 'FF74837F' } };
 
-  const matrix = [header];
+  const headerRow = 5;
+  const labels = ['Cabang'];
+  years.forEach(y => { MONTH_ABBR.forEach(m => labels.push(`${m} ${y}`)); labels.push(`Total ${y}`); });
+  writeHeaderRow(ws, headerRow, labels);
+
+  ws.getColumn(1).width = 22;
+  for (let i = 2; i <= lastCol; i++) ws.getColumn(i).width = 12;
+
+  let r = headerRow + 1;
   for (const row of rows) {
-    const line = [row.label];
+    writeDataCell(ws, r, 1, row.label, true);
+    let c = 2;
     for (const y of years) {
-      for (let m = 1; m <= 12; m++) line.push(Number(aggFor(row.branchIds, y, m)[state.trendMetric]) || 0);
-      line.push(Number(aggFor(row.branchIds, y, null)[state.trendMetric]) || 0);
+      for (let m = 1; m <= 12; m++) {
+        const v = aggFor(row.branchIds, y, m)[state.trendMetric];
+        writeDataCell(ws, r, c++, v, false, Number(v) < 0);
+      }
+      const total = aggFor(row.branchIds, y, null)[state.trendMetric];
+      writeDataCell(ws, r, c++, total, false, Number(total) < 0);
     }
-    matrix.push(line);
+    if (row.kind === 'grand') {
+      for (let cc = 1; cc <= lastCol; cc++) {
+        const cell = ws.getCell(r, cc);
+        cell.fill = FILL_GRAND;
+        cell.font = { ...(cell.font ?? {}), bold: true, color: { argb: 'FFFFFFFF' } };
+      }
+    }
+    r++;
   }
-  return { name: `Tren ${metricCol.path[metricCol.path.length - 1]} ${years.join('-')}`, rows: matrix };
+
+  ws.views = [{ state: 'frozen', xSplit: 1, ySplit: headerRow }];
 }
 
 async function exportFile() {
-  const { name, rows: matrix } = state.isSingle ? toDetailMatrix() : toTrendMatrix();
   el.export.disabled = true;
   try {
-    const mod = await import('https://esm.sh/xlsx@0.18.5');
-    const XLSX = mod.utils ? mod : mod.default;
-    const ws = XLSX.utils.aoa_to_sheet(matrix);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
-    XLSX.writeFile(wb, name + '.xlsx');
-  } catch {
-    const csv = matrix.map(line => line
-      .map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
-    const url = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }));
-    const a = Object.assign(document.createElement('a'), { href: url, download: name + '.csv' });
+    const mod = await import('https://esm.sh/exceljs@4.4.0');
+    const ExcelJS = mod.default ?? mod;
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Weekly Report MOS';
+    wb.created = new Date();
+
+    if (state.isSingle) await buildDetailSheet(wb); else await buildTrendSheet(wb);
+
+    const buf = await wb.xlsx.writeBuffer();
+    const [year] = state.years, [month] = state.months;
+    const metricCol = COLUMNS.find(c => c.key === state.trendMetric);
+    const name = state.isSingle
+      ? `MOS ${MONTHS[month - 1]} ${year} W${state.week}`
+      : `Tren ${metricCol.path[metricCol.path.length - 1]} ${[...state.years].sort((a, b) => a - b).join('-')}`;
+    const url = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: name + '.xlsx' });
     a.click();
     URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error(err);
+    showNote('note', 'Gagal membuat file Excel: ' + (err.message || err), 'err');
   } finally {
     el.export.disabled = false;
   }
