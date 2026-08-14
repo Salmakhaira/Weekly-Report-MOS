@@ -11,7 +11,7 @@
      perkembangan dari waktu ke waktu.
    ===================================================================== */
 
-import { sb, requireSession, renderShell, showNote, escapeHtml } from './app.js';
+import { sb, requireSession, renderShell, showNote, escapeHtml, closeFilterDropdownsOnOutsideClick } from './app.js';
 import { COLUMNS, MONTHS, WEEKS, computeRow, aggregate, buildHeaderMatrix, fmt } from './schema.js';
 
 const { profile } = await requireSession();
@@ -121,6 +121,7 @@ function renderMonthPanel() {
 
 renderYearPanel();
 renderMonthPanel();
+closeFilterDropdownsOnOutsideClick();
 el.week.innerHTML = WEEKS.map(w =>
   `<button type="button" data-week="${w}" aria-pressed="${w === state.week}">W${w}</button>`).join('');
 el.lblWeek.textContent = state.week;
