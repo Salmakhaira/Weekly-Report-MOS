@@ -1,8 +1,3 @@
-/* =====================================================================
-   app.js — koneksi Supabase, penjaga sesi, dan header yang dipakai
-   di semua halaman.
-   ===================================================================== */
-
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { SUPABASE_URL, SUPABASE_ANON_KEY, APP_NAME, APP_SUB } from './config.js';
 
