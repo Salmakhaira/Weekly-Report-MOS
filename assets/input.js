@@ -1,5 +1,5 @@
 import { sb, requireSession, renderShell, showNote, escapeHtml, defaultPeriod, closeFilterDropdownsOnOutsideClick } from './app.js';
-import { COLUMNS, MONTHS, WEEKS, STORED, computeRow, fmt } from './schema.js';
+import { COLUMNS, MONTHS, WEEKS, STORED, computeRow, aggregate, fmt } from './schema.js';
 
 /* Kalau ada error tak terduga di mana pun, tampilkan di layar supaya
    halaman tidak diam-diam "macet" tanpa penjelasan. */
@@ -24,8 +24,8 @@ renderShell(profile, 'input');
 const isAdmin = profile.role === 'admin';
 const COL = new Map(COLUMNS.map(c => [c.key, c]));
 
-/* Field yang cuma satu nilai per BULAN (bukan per minggu). */
-const MONTHLY_FIELDS = ['plan_sales_master', 'po_non_sap', 'ol_min_prtm', 'po_last_month'];
+/* Field yang cuma satu nilai per BULAN (bukan per minggu), MASIH per-salesman. */
+const MONTHLY_FIELDS = ['plan_sales_master', 'po_non_sap', 'po_last_month'];
 
 /* Kolom hasil hitung yang ditampilkan di tabel mingguan. */
 const WEEKLY_CALC = ['total_ol_prtm', 'balance_prtm', 'total_po', 'total_po_outlook'];
@@ -60,6 +60,8 @@ const el = {
   band: document.getElementById('periodband'),
   monthlyWrap: document.getElementById('monthlywrap'),
   weeklyWrap: document.getElementById('weeklywrap'),
+  olMinPrtm: document.getElementById('f-ol-min-prtm'),
+  olMinPrtmStatus: document.getElementById('ol-min-prtm-status'),
   showPrev: document.getElementById('f-showprev'),
   btnSaveAll: document.getElementById('btn-save-all'),
   status: document.getElementById('status'),
@@ -82,6 +84,9 @@ const state = {
   rows: new Map(),      // salesman_id -> baris bulan berjalan
   prevRows: new Map(),  // salesman_id -> baris bulan sebelumnya (pembanding W1)
   dirty: new Set(),
+  branchOlMinPrtm: 0,        // angka level cabang, dari tabel branch_monthly
+  branchOlMinPrtmId: null,   // id baris branch_monthly kalau sudah ada
+  branchOlMinPrtmDirty: false,
 };
 
 /* ---------- Filter Tahun & Bulan (multi-pilih) ------------------------- */
@@ -204,6 +209,13 @@ el.week.addEventListener('click', (e) => {
   renderWeeklyGrid();
 });
 el.showPrev.addEventListener('change', renderWeeklyGrid);
+el.olMinPrtm.addEventListener('input', () => {
+  state.branchOlMinPrtm = parseFloat(el.olMinPrtm.value) || 0;
+  state.branchOlMinPrtmDirty = true;
+  el.olMinPrtmStatus.textContent = 'Belum disimpan';
+  refreshDirtyCount();
+  renderWeeklyGrid();
+});
 
 /* ---------- Daftar cabang -------------------------------------------- */
 const { data: branches, error: brErr } = await sb
@@ -256,7 +268,7 @@ async function load() {
   const { year, month } = state.active;
   const prev = prevPeriod(year, month);
 
-  const [{ data: salesmen, error: e1 }, { data: entries, error: e2 }, { data: prevEntries }] = await Promise.all([
+  const [{ data: salesmen, error: e1 }, { data: entries, error: e2 }, { data: prevEntries }, { data: bm }] = await Promise.all([
     sb.from('salesmen').select('id, name, sort_order')
       .eq('branch_id', state.branchId).eq('is_active', true).order('sort_order'),
     sb.from('mos_entries').select('*')
@@ -265,9 +277,20 @@ async function load() {
     sb.from('mos_entries').select('*')
       .eq('branch_id', state.branchId)
       .eq('period_year', prev.year).eq('period_month', prev.month),
+    sb.from('branch_monthly').select('*')
+      .eq('branch_id', state.branchId).eq('period_year', year).eq('period_month', month)
+      .maybeSingle(),
   ]);
 
   if (e1 || e2) { showNote('note', 'Gagal memuat data: ' + (e1 || e2).message, 'err'); return; }
+
+  state.branchOlMinPrtm = Number(bm?.ol_min_prtm) || 0;
+  state.branchOlMinPrtmId = bm?.id ?? null;
+  state.branchOlMinPrtmDirty = false;
+  el.olMinPrtm.value = state.branchOlMinPrtm;
+  el.olMinPrtmStatus.textContent = bm?.updated_at
+    ? 'Tersimpan ' + new Date(bm.updated_at).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })
+    : 'Belum pernah disimpan.';
 
   state.salesmen = salesmen ?? [];
   state.rows = new Map();
@@ -416,6 +439,23 @@ function renderWeeklyGrid() {
       html += `<td colspan="${WEEKLY_CALC.length + 1}"></td></tr>`;
     }
   }
+
+  // Baris TOTAL — satu-satunya baris yang menampilkan Balance PRTM,
+  // karena OL Min PRTM adalah angka level cabang, bukan per salesman.
+  {
+    const allRows = state.salesmen.map(s => state.rows.get(s.id));
+    const totalCalc = aggregate(allRows, w, state.branchOlMinPrtm);
+    html += `<tr class="total"><td class="sticky-only">TOTAL</td>`;
+    for (const c of inputCols) {
+      html += `<td>${fmt(totalCalc[c.key], COL.get(c.key))}</td>`;
+    }
+    for (const k of WEEKLY_CALC) {
+      const v = totalCalc[k];
+      html += `<td class="calc ${Number(v) < 0 ? 'neg' : ''}">${fmt(v, COL.get(k))}</td>`;
+    }
+    html += `<td></td></tr>`;
+  }
+
   html += '</tbody></table>';
   el.weeklyWrap.innerHTML = html;
 
@@ -461,7 +501,7 @@ function onGridEdit(inp) {
 
 function refreshDirtyCount() {
   const n = document.getElementById('dirty-count');
-  if (n) n.textContent = state.dirty.size;
+  if (n) n.textContent = state.dirty.size + (state.branchOlMinPrtmDirty ? 1 : 0);
 }
 
 /* ---------- Tempel blok dari Excel ---------------------------------------- */
@@ -534,7 +574,9 @@ async function persist(sids) {
 }
 
 async function saveAll() {
-  if (!state.dirty.size) { showNote('note', 'Tidak ada perubahan untuk disimpan.', 'info'); return; }
+  if (!state.dirty.size && !state.branchOlMinPrtmDirty) {
+    showNote('note', 'Tidak ada perubahan untuk disimpan.', 'info'); return;
+  }
 
   const w = state.week;
   const firstTimeCount = [...state.dirty].filter(sid => {
@@ -552,7 +594,11 @@ async function saveAll() {
 
   showNote('note', '');
   el.btnSaveAll.disabled = true;
-  const ok = await persist([...state.dirty]);
+
+  let ok = true;
+  if (state.dirty.size) ok = await persist([...state.dirty]);
+  if (ok && state.branchOlMinPrtmDirty) ok = await persistBranchOlMinPrtm();
+
   el.btnSaveAll.disabled = false;
 
   if (ok) {
@@ -561,4 +607,31 @@ async function saveAll() {
     renderMonthlyGrid();
     renderWeeklyGrid();
   }
+}
+
+async function persistBranchOlMinPrtm() {
+  const payload = {
+    branch_id: state.branchId,
+    period_year: state.active.year,
+    period_month: state.active.month,
+    ol_min_prtm: state.branchOlMinPrtm,
+  };
+  if (state.branchOlMinPrtmId) payload.id = state.branchOlMinPrtmId;
+
+  const { data, error } = await sb.from('branch_monthly')
+    .upsert(payload, { onConflict: 'branch_id,period_year,period_month' })
+    .select('id, updated_at').maybeSingle();
+
+  if (error) {
+    showNote('note',
+      error.code === '42501'
+        ? 'Anda tidak punya izin menulis OL Min PRTM untuk cabang ini.'
+        : 'Gagal menyimpan OL Min PRTM: ' + error.message, 'err');
+    return false;
+  }
+
+  state.branchOlMinPrtmId = data?.id ?? state.branchOlMinPrtmId;
+  state.branchOlMinPrtmDirty = false;
+  el.olMinPrtmStatus.textContent = 'Tersimpan ' + new Date().toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' });
+  return true;
 }
