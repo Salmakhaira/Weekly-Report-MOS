@@ -1,12 +1,3 @@
-/* =====================================================================
-   schema.js — Sumber kebenaran tunggal untuk struktur kolom MOS.
-   Dipakai bersama oleh form Input Data dan tabel View Data.
-
-   path : hirarki header (baris 3 / 4 / 5 di Excel)
-   input: true  -> muncul sebagai isian di form
-   calc : true  -> dihitung otomatis, tidak pernah disimpan mentah
-   ===================================================================== */
-
 export const MONTHS = [
   'JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI',
   'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER',
