@@ -1,23 +1,3 @@
-/* =====================================================================
-   input.js — grid Excel-style. Dua tabel:
-   1. "Data bulanan"  — field yang jarang berubah, terlipat, dibuka sesekali.
-   2. "Data minggu ini" — 5 angka yang benar-benar berubah tiap minggu
-      (TM, Act PRTM, Quot Confidence >80%/50-80%/<50%), semua salesman
-      kelihatan sekaligus, bisa diketik/di-Tab/di-paste seperti Excel.
-
-   Pengaman yang tersemat:
-   - Baris yang minggu-nya sudah disubmit terkunci: input disabled, abu-abu.
-     Penguncian sesungguhnya ditegakkan di database (lihat
-     supabase/04_week_submission_lock.sql); ini cuma agar langsung
-     kelihatan di layar tanpa perlu gagal simpan dulu.
-   - Toggle "Tampilkan minggu lalu" menambah baris pembanding tipis di
-     bawah tiap salesman.
-   - Sel yang angkanya melompat jauh dari minggu lalu (naik/turun >2x)
-     disorot kuning.
-   - Konfirmasi sebelum simpan kalau ada minggu yang baru pertama kali
-     disubmit (karena setelah itu terkunci untuk cabang).
-   ===================================================================== */
-
 import { sb, requireSession, renderShell, showNote, escapeHtml, defaultPeriod, closeFilterDropdownsOnOutsideClick } from './app.js';
 import { COLUMNS, MONTHS, WEEKS, STORED, computeRow, fmt } from './schema.js';
 
