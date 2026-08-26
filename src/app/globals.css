@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-surface text-ink antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04";
+  }
+  /* Figures line up column-to-column in every table. */
+  .num {
+    font-variant-numeric: tabular-nums;
+    @apply font-mono text-[13px];
+  }
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-white;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3.5 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-brand-600 text-white hover:bg-brand-700;
+  }
+  .btn-secondary {
+    @apply btn border border-line bg-white text-ink-soft hover:bg-surface;
+  }
+  .btn-ghost {
+    @apply btn text-ink-soft hover:bg-line/60;
+  }
+  .field {
+    @apply w-full rounded-md border border-line bg-white px-3 py-2 text-sm text-ink placeholder:text-ink-mute focus:border-brand-500;
+  }
+  .label {
+    @apply mb-1.5 block text-xs font-semibold uppercase tracking-wide text-ink-mute;
+  }
+  .card {
+    @apply rounded-lg border border-line bg-white shadow-card;
+  }
+  .th {
+    @apply whitespace-nowrap px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-ink-mute;
+  }
+  .td {
+    @apply whitespace-nowrap px-4 py-2.5 text-sm text-ink-soft;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
